@@ -51,7 +51,7 @@ services:
       grokiq-backend:
         condition: service_healthy
     ports:
-      - 127.0.0.1:${GROKIQ_WEB_PORT:-8091}:80
+      - ${GROKIQ_WEB_PORT:-8091}:80
 
 volumes:
   grokiq-data:

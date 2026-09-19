@@ -15,6 +15,7 @@ from app.services.probe_manager import ProbeManager
 from app.services.register_integration import RegisterIntegrationService
 from app.services.request_audit_service import RequestAuditService
 from app.services.scheduler import SchedulerService
+from app.services.linuxdo_oauth import LinuxDoOAuthService
 from app.services.settings_service import RuntimeSettingsService
 from app.services.sso_report_service import SsoReportService
 from app.services.update_check import UpdateCheckService
@@ -56,6 +57,7 @@ def build_router(
     register_integration: RegisterIntegrationService,
     wechat_notifications: WeChatAccountNotificationService,
     updates: UpdateCheckService,
+    linuxdo_oauth: LinuxDoOAuthService,
     request_audits: RequestAuditService | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api")
@@ -72,7 +74,11 @@ def build_router(
             auth=auth_service,
         )
     )
-    router.include_router(build_public_router(account_service, client, auth_service))
+    router.include_router(
+        build_public_router(
+            account_service, client, auth_service, linuxdo_oauth
+        )
+    )
     router.include_router(
         build_integrations_router(settings, register_integration)
     )

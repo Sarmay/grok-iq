@@ -5,6 +5,8 @@ import {
   AlertTriangle,
   Compass,
   Loader2,
+  LogIn,
+  LogOut,
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
@@ -39,6 +41,12 @@ import { PublicUsageDashboard } from '@/features/monitor/components/public-usage
 
 const USAGE_PERIOD_KEY = 'grokiq.public.upstream-usage-period.v1'
 const USAGE_PERIODS: PublicUpstreamUsagePeriod[] = ['24h', '7d', '30d', '90d']
+const LINUXDO_OAUTH_ERROR_LABELS: Record<string, string> = {
+  not_configured: 'Linux DO Connect 尚未配置完成',
+  denied: '已取消 Linux DO 授权',
+  invalid_state: '登录状态已失效，请重新登录',
+  exchange_failed: '无法向 Linux DO 换取用户信息',
+}
 
 const providerMeta: Record<
   PublicUpstreamProvider,
@@ -85,11 +93,22 @@ export function PublicUpstreamStatusPage() {
     ? periodView.value.period
     : '24h'
   const usageRefresh = useRef(false)
+  const oauthQuery = useQuery({
+    queryKey: ['public', 'linuxdo', 'status'],
+    queryFn: api.linuxdoOauthStatus,
+    retry: 1,
+  })
+  const oauthBlocked =
+    !isAdmin &&
+    oauthQuery.data?.enabled === true &&
+    oauthQuery.data.authenticated !== true
+  const oauthReady = isAdmin || oauthQuery.isSuccess
   const query = useQuery({
     queryKey: ['public', 'upstream-accounts', isAdmin],
     queryFn: api.publicUpstreamAccounts,
     refetchInterval: 15_000,
     retry: 1,
+    enabled: oauthReady && !oauthBlocked,
   })
   // usageRefresh is a one-shot fetch flag, not part of the cache identity.
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
@@ -106,8 +125,20 @@ export function PublicUpstreamStatusPage() {
     },
     refetchInterval: 30_000,
     retry: 1,
+    enabled: oauthReady && !oauthBlocked,
     placeholderData: (previous) => previous,
   })
+  const oauthErrorCode =
+    typeof window === 'undefined'
+      ? null
+      : new URLSearchParams(window.location.search).get('oauth_error')
+  const oauthErrorMessage = oauthErrorCode
+    ? (LINUXDO_OAUTH_ERROR_LABELS[oauthErrorCode] ??
+      'Linux DO 登录失败，请重试')
+    : oauthQuery.isError
+      ? getErrorMessage(oauthQuery.error)
+      : ''
+  const linuxdoUser = oauthQuery.data?.user
   const data = query.data ?? emptySummary
   const usageErrorMessage = usageQuery.isError
     ? getErrorMessage(usageQuery.error)
@@ -134,6 +165,19 @@ export function PublicUpstreamStatusPage() {
             </span>
           </div>
           <div className='flex items-center gap-1'>
+            {linuxdoUser ? (
+              <div className='mr-1 flex items-center gap-1'>
+                <span className='hidden max-w-40 truncate text-xs text-muted-foreground sm:inline'>
+                  {linuxdoUser.name || linuxdoUser.username}
+                </span>
+                <Button variant='ghost' size='sm' asChild>
+                  <a href={api.linuxdoLogoutUrl()}>
+                    <LogOut />
+                    退出
+                  </a>
+                </Button>
+              </div>
+            ) : null}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -160,6 +204,32 @@ export function PublicUpstreamStatusPage() {
       </header>
 
       <main className='mx-auto w-full max-w-6xl space-y-6 px-4 py-6 md:py-8'>
+        {!isAdmin && oauthQuery.isLoading ? (
+          <div className='flex justify-center py-16'>
+            <Loader2 className='size-6 animate-spin text-muted-foreground' />
+          </div>
+        ) : oauthBlocked || (!isAdmin && oauthQuery.isError) ? (
+          <Card className='mx-auto max-w-lg'>
+            <CardHeader>
+              <CardTitle>使用 Linux DO 登录</CardTitle>
+            </CardHeader>
+            <CardContent className='space-y-4'>
+              <p className='text-sm text-muted-foreground'>
+                公开状态页已开启 Linux DO Connect 校验。授权后即可查看上游看板。
+              </p>
+              {oauthErrorMessage ? (
+                <p className='text-sm text-destructive'>{oauthErrorMessage}</p>
+              ) : null}
+              <Button asChild>
+                <a href={api.linuxdoLoginUrl()}>
+                  <LogIn />
+                  使用 Linux DO 登录
+                </a>
+              </Button>
+            </CardContent>
+          </Card>
+        ) : (
+          <>
         <div className='flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between'>
           <div>
             <p className='text-xs font-medium tracking-[0.16em] text-primary uppercase'>
@@ -347,6 +417,8 @@ export function PublicUpstreamStatusPage() {
           最近更新：{hasData ? formatDate(data.updatedAt) : '—'} · 每 15
           秒自动刷新
         </p>
+          </>
+        )}
       </main>
     </div>
   )

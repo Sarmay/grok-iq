@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  LINUXDO_CALLBACK_PATH,
+  linuxdoCallbackUrl,
   mergeEnabledProfileIds,
   moveOrderedId,
   syncRegisterProbeProfileRounds,
@@ -21,6 +23,14 @@ describe('mergeEnabledProfileIds', () => {
       'a',
       'b',
     ])
+  })
+})
+
+describe('linuxdoCallbackUrl', () => {
+  it('builds the public Linux DO callback from the current origin', () => {
+    expect(linuxdoCallbackUrl()).toBe(
+      new URL(LINUXDO_CALLBACK_PATH, window.location.origin).toString()
+    )
   })
 })
 

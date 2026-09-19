@@ -27,6 +27,7 @@ class RuntimeSettingsValidator:
         self._normalize_register_strategy(candidate)
         self._normalize_register_callback(candidate)
         self._normalize_wechat(candidate)
+        self._normalize_linuxdo_oauth(candidate)
         self._normalize_sso_proxy(candidate)
         return candidate
 
@@ -237,6 +238,29 @@ class RuntimeSettingsValidator:
         missing = [label for label, value in required.items() if not value]
         if missing:
             raise ValueError(f"开启微信异常推送前请填写：{'、'.join(missing)}")
+
+    @staticmethod
+    def _normalize_linuxdo_oauth(candidate: Settings) -> None:
+        candidate.linuxdo_oauth_client_id = candidate.linuxdo_oauth_client_id.strip()
+        candidate.linuxdo_oauth_client_secret = (
+            candidate.linuxdo_oauth_client_secret.strip()
+        )
+        candidate.linuxdo_oauth_redirect_uri = (
+            candidate.linuxdo_oauth_redirect_uri.strip()
+        )
+        if not candidate.linuxdo_oauth_enabled:
+            return
+        required = {
+            "Client ID": candidate.linuxdo_oauth_client_id,
+            "Client Secret": candidate.linuxdo_oauth_client_secret,
+            "回调地址": candidate.linuxdo_oauth_redirect_uri,
+        }
+        missing = [label for label, value in required.items() if not value]
+        if missing:
+            raise ValueError(f"开启 Linux DO 登录前请填写：{'、'.join(missing)}")
+        parsed = urlsplit(candidate.linuxdo_oauth_redirect_uri)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("Linux DO 回调地址必须是有效的 HTTP(S) URL")
 
     @staticmethod
     def _normalize_sso_proxy(candidate: Settings) -> None:

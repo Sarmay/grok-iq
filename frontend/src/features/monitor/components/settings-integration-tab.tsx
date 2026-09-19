@@ -1,4 +1,5 @@
 import {
+  BadgeCheck,
   ChevronDown,
   ChevronUp,
   Copy,
@@ -41,11 +42,14 @@ import {
   SettingList,
   SettingListItem,
   SettingsCard,
+  SwitchRow,
   WebhookContractDialog,
 } from './settings-components'
 import {
   GROK_REGISTER_REPOSITORY_URL,
+  LINUXDO_CONNECT_DOCS_URL,
   REGISTER_CALLBACK_PLACEHOLDER_URL,
+  linuxdoCallbackUrl,
   moveOrderedId,
   syncRegisterProbeProfileRounds,
   type SettingsForm,
@@ -96,6 +100,10 @@ export function SettingsIntegrationTab({
         <TabsTrigger value='import'>
           <Workflow />
           导入探针
+        </TabsTrigger>
+        <TabsTrigger value='linuxdo'>
+          <BadgeCheck />
+          Linux DO
         </TabsTrigger>
       </TabsList>
 
@@ -461,6 +469,86 @@ export function SettingsIntegrationTab({
           </div>
         </div>
       </SettingsCard>
+      </TabsContent>
+      <TabsContent value='linuxdo' className='mt-0 space-y-4'>
+        <SettingsCard
+          icon={BadgeCheck}
+          title='Linux DO Connect'
+          description='开启后，公开 /status 页需要用 Linux DO 账号登录；管理员 JWT 仍可直接访问。'
+        >
+          <div className='space-y-5'>
+            <SwitchRow
+              label='开启公开状态页 Linux DO 登录'
+              description='按 Linux DO Connect 授权码流程校验访客。Client Secret 只加密保存，设置接口不会回传明文。'
+              checked={form.linuxdoOauthEnabled}
+              onCheckedChange={(value) => set('linuxdoOauthEnabled', value)}
+            />
+            <div className='grid gap-4 lg:grid-cols-2'>
+              <Field
+                label='Client ID'
+                hint='在 connect.linux.do 创建应用后复制'
+              >
+                <Input
+                  value={form.linuxdoOauthClientId}
+                  onChange={(event) =>
+                    set('linuxdoOauthClientId', event.target.value)
+                  }
+                  placeholder='Linux DO Client ID'
+                  autoComplete='off'
+                />
+              </Field>
+              <SecretField
+                name='linuxdoOauthClientSecret'
+                value={form.linuxdoOauthClientSecret}
+                settings={settings}
+                clearing={clearSecrets.includes('linuxdoOauthClientSecret')}
+                onChange={(value) => set('linuxdoOauthClientSecret', value)}
+                onToggleClear={() =>
+                  toggleSecretClear('linuxdoOauthClientSecret')
+                }
+              />
+              <Field
+                label='回调地址'
+                hint='必须与 Linux DO 应用里登记的 Redirect URI 完全一致'
+                className='lg:col-span-2'
+              >
+                <div className='flex gap-2'>
+                  <Input
+                    value={form.linuxdoOauthRedirectUri}
+                    onChange={(event) =>
+                      set('linuxdoOauthRedirectUri', event.target.value)
+                    }
+                    placeholder={linuxdoCallbackUrl()}
+                    autoComplete='off'
+                  />
+                  <Button
+                    type='button'
+                    variant='outline'
+                    onClick={() =>
+                      set('linuxdoOauthRedirectUri', linuxdoCallbackUrl())
+                    }
+                  >
+                    填入当前站点
+                  </Button>
+                </div>
+              </Field>
+            </div>
+            <div className='flex flex-wrap items-center gap-3 border-t pt-4 text-xs leading-5 text-muted-foreground'>
+              <a
+                href={LINUXDO_CONNECT_DOCS_URL}
+                target='_blank'
+                rel='noopener noreferrer'
+                className='inline-flex items-center gap-1.5 font-medium text-foreground hover:underline'
+              >
+                Linux DO Connect 文档
+                <ExternalLink className='size-3.5' />
+              </a>
+              <span>
+                授权地址 connect.linux.do/oauth2/authorize，scope 为 user。
+              </span>
+            </div>
+          </div>
+        </SettingsCard>
       </TabsContent>
     </Tabs>
   )

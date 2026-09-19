@@ -68,6 +68,12 @@ def build_health_router(
                     and settings.wechat_openid
                     and settings.wechat_template_id
                 ),
+                "linuxdoOauthEnabled": settings.linuxdo_oauth_enabled,
+                "linuxdoConfigured": bool(
+                    settings.linuxdo_oauth_client_id
+                    and settings.linuxdo_oauth_client_secret
+                    and settings.linuxdo_oauth_redirect_uri
+                ),
             },
         }
 

@@ -226,6 +226,10 @@ class RuntimeSettingsService:
             "wechatAppSecretConfigured": bool(s.wechat_app_secret),
             "wechatOpenid": s.wechat_openid,
             "wechatTemplateId": s.wechat_template_id,
+            "linuxdoOauthEnabled": s.linuxdo_oauth_enabled,
+            "linuxdoOauthClientId": s.linuxdo_oauth_client_id,
+            "linuxdoOauthClientSecretConfigured": bool(s.linuxdo_oauth_client_secret),
+            "linuxdoOauthRedirectUri": s.linuxdo_oauth_redirect_uri,
             "schedulerEnabled": s.scheduler_enabled,
             "quarantineRecoveryEnabled": s.quarantine_recovery_enabled,
             "schedulerTimezone": s.scheduler_timezone,
@@ -366,6 +370,7 @@ class RuntimeSettingsService:
             "grokRegisterWebhookToken": self.settings.grok_register_webhook_token,
             "ssoProxy": self.settings.sso_proxy,
             "wechatAppSecret": self.settings.wechat_app_secret,
+            "linuxdoOauthClientSecret": self.settings.linuxdo_oauth_client_secret,
         }
         if name not in secrets:
             raise ValueError("不支持读取该敏感设置")

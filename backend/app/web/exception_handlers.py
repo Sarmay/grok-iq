@@ -11,6 +11,7 @@ from app.integrations.wechat.client import WeChatIntegrationError
 from app.persistence.auth_repository import AdminAlreadyExistsError
 from app.persistence.probe_repository import QueueFullError, RunStateError
 from app.services.auth_service import AuthenticationError
+from app.services.linuxdo_oauth import LinuxDoAuthenticationRequired
 from app.services.chat_service import ChatUpstreamError
 from app.services.sso_report_service import SsoReportNotFoundError
 
@@ -61,6 +62,20 @@ def install_exception_handlers(app: FastAPI) -> None:
         exc: AuthenticationError,
     ) -> JSONResponse:
         return _error_response(401, exc, headers=NO_STORE_HEADERS)
+
+    @app.exception_handler(LinuxDoAuthenticationRequired)
+    async def linuxdo_authentication_required(
+        _: Request,
+        exc: LinuxDoAuthenticationRequired,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=401,
+            headers=NO_STORE_HEADERS,
+            content={
+                "detail": exc.message,
+                "code": "linuxdo_oauth_required",
+            },
+        )
 
     @app.exception_handler(AdminAlreadyExistsError)
     @app.exception_handler(RunStateError)

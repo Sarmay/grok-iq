@@ -10,6 +10,7 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.version import current_version
 from app.integrations.grok2api.client import Grok2APIClient
+from app.integrations.linuxdo.client import LinuxDoConnectClient
 from app.integrations.wechat.client import WeChatTestAccountClient
 from app.persistence.account_repository import AccountRepository
 from app.persistence.auth_repository import AuthRepository
@@ -24,6 +25,7 @@ from app.services.account_service import AccountService
 from app.services.auth_service import AuthService
 from app.services.chat_service import ChatService
 from app.services.egress_service import EgressService
+from app.services.linuxdo_oauth import LinuxDoOAuthService
 from app.services.probe_manager import ProbeManager
 from app.services.quality_retry_isolation import QualityRetryIsolationService
 from app.services.register_integration import RegisterIntegrationService
@@ -51,6 +53,9 @@ register_event_repository = RegisterEventRepository(database)
 sso_report_repository = SsoReportRepository(database)
 runtime_settings_service = RuntimeSettingsService(settings, settings_repository)
 auth_service = AuthService(settings, auth_repository)
+linuxdo_oauth_service = LinuxDoOAuthService(
+    settings, auth_service.secret, LinuxDoConnectClient()
+)
 chat_service = ChatService(settings=settings, providers=chat_provider_repository)
 sso_report_service = SsoReportService(
     sso_report_repository,
@@ -201,6 +206,7 @@ app.include_router(
         register_integration=register_integration_service,
         wechat_notifications=wechat_notification_service,
         updates=update_check_service,
+        linuxdo_oauth=linuxdo_oauth_service,
     )
 )
 

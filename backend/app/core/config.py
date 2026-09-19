@@ -132,6 +132,13 @@ class Settings(BaseSettings):
     wechat_openid: str = ""
     wechat_template_id: str = ""
 
+    # Linux DO Connect gates the public /status page. Credentials are stored as
+    # runtime settings; the client secret is encrypted like other secrets.
+    linuxdo_oauth_enabled: bool = False
+    linuxdo_oauth_client_id: str = ""
+    linuxdo_oauth_client_secret: str = ""
+    linuxdo_oauth_redirect_uri: str = ""
+
     # User-created probe plans and GrokIQ-owned quarantine recovery are
     # independently configurable while sharing the same scheduler process.
     scheduler_enabled: bool = True
@@ -269,6 +276,10 @@ class Settings(BaseSettings):
         "wechat_app_secret",
         "wechat_openid",
         "wechat_template_id",
+        "linuxdo_oauth_enabled",
+        "linuxdo_oauth_client_id",
+        "linuxdo_oauth_client_secret",
+        "linuxdo_oauth_redirect_uri",
         "scheduler_enabled",
         "quarantine_recovery_enabled",
         "scheduler_timezone",
@@ -344,6 +355,7 @@ class Settings(BaseSettings):
             "grok_register_webhook_token",
             "sso_proxy",
             "wechat_app_secret",
+            "linuxdo_oauth_client_secret",
         }
     )
 

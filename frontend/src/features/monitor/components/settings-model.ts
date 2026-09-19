@@ -34,6 +34,10 @@ export type SettingsForm = {
   wechatAppSecret: string
   wechatOpenid: string
   wechatTemplateId: string
+  linuxdoOauthEnabled: boolean
+  linuxdoOauthClientId: string
+  linuxdoOauthClientSecret: string
+  linuxdoOauthRedirectUri: string
   probeWorkerConcurrency: number
   probeQueueLimit: number
   probeStepDelaySeconds: number
@@ -175,6 +179,11 @@ export const secretMetadata: Record<
     placeholder: '留空保持当前 AppSecret',
     configuredKey: 'wechatAppSecretConfigured',
   },
+  linuxdoOauthClientSecret: {
+    label: 'Linux DO Client Secret',
+    placeholder: '留空保持当前 Client Secret',
+    configuredKey: 'linuxdoOauthClientSecretConfigured',
+  },
 }
 
 export const RECOMMENDED_RISK_SCORING = {
@@ -189,6 +198,9 @@ export const RECOMMENDED_RISK_SCORING = {
   riskStreakCap: 15,
 } as const
 
+export const LINUXDO_CONNECT_DOCS_URL =
+  'https://wiki.linux.do/Community/LinuxDoConnect'
+export const LINUXDO_CALLBACK_PATH = '/api/public/linuxdo/callback'
 export const REGISTER_WEBHOOK_PATH =
   '/api/integrations/grok-register/account-imported'
 export const GROK_REGISTER_REPOSITORY_URL =
@@ -297,6 +309,11 @@ export function registerWebhookUrl() {
   return new URL(REGISTER_WEBHOOK_PATH, window.location.origin).toString()
 }
 
+export function linuxdoCallbackUrl() {
+  if (typeof window === 'undefined') return LINUXDO_CALLBACK_PATH
+  return new URL(LINUXDO_CALLBACK_PATH, window.location.origin).toString()
+}
+
 export function toSettingsForm(
   settings: EditableRuntimeSettings
 ): SettingsForm {
@@ -331,6 +348,10 @@ export function toSettingsForm(
     wechatAppSecret: settings.wechatAppSecret,
     wechatOpenid: settings.wechatOpenid,
     wechatTemplateId: settings.wechatTemplateId,
+    linuxdoOauthEnabled: settings.linuxdoOauthEnabled ?? false,
+    linuxdoOauthClientId: settings.linuxdoOauthClientId ?? '',
+    linuxdoOauthClientSecret: settings.linuxdoOauthClientSecret ?? '',
+    linuxdoOauthRedirectUri: settings.linuxdoOauthRedirectUri ?? '',
     probeWorkerConcurrency: settings.probeWorkerConcurrency,
     probeQueueLimit: settings.probeQueueLimit,
     probeStepDelaySeconds: settings.probeStepDelaySeconds,
@@ -462,6 +483,9 @@ export function buildSettingsPayload(
     wechatAppId: form.wechatAppId.trim(),
     wechatOpenid: form.wechatOpenid.trim(),
     wechatTemplateId: form.wechatTemplateId.trim(),
+    linuxdoOauthEnabled: form.linuxdoOauthEnabled,
+    linuxdoOauthClientId: form.linuxdoOauthClientId.trim(),
+    linuxdoOauthRedirectUri: form.linuxdoOauthRedirectUri.trim(),
     probeWorkerConcurrency: form.probeWorkerConcurrency,
     probeQueueLimit: form.probeQueueLimit,
     probeStepDelaySeconds: form.probeStepDelaySeconds,
@@ -560,6 +584,13 @@ export function buildSettingsPayload(
   ) {
     payload.wechatAppSecret = form.wechatAppSecret
   }
+  if (
+    !clearSecrets.includes('linuxdoOauthClientSecret') &&
+    form.linuxdoOauthClientSecret.trim() &&
+    form.linuxdoOauthClientSecret !== original.linuxdoOauthClientSecret
+  ) {
+    payload.linuxdoOauthClientSecret = form.linuxdoOauthClientSecret
+  }
   return payload
 }
 
@@ -580,6 +611,9 @@ export function mergeEditableSettings(
     wechatAppSecret: clearSecrets.includes('wechatAppSecret')
       ? ''
       : form.wechatAppSecret,
+    linuxdoOauthClientSecret: clearSecrets.includes('linuxdoOauthClientSecret')
+      ? ''
+      : form.linuxdoOauthClientSecret,
   }
 }
 
@@ -682,6 +716,29 @@ export function validateSettings(form: SettingsForm) {
     throw new Error(
       '开启微信异常推送前请填写 AppID、AppSecret、OpenID 和模板 ID'
     )
+  }
+  if (form.linuxdoOauthEnabled) {
+    if (
+      !form.linuxdoOauthClientId.trim() ||
+      !form.linuxdoOauthClientSecret.trim() ||
+      !form.linuxdoOauthRedirectUri.trim()
+    ) {
+      throw new Error(
+        '开启 Linux DO 登录前请填写 Client ID、Client Secret 和回调地址'
+      )
+    }
+    let parsed: URL | undefined
+    try {
+      parsed = new URL(form.linuxdoOauthRedirectUri.trim())
+    } catch {
+      parsed = undefined
+    }
+    if (
+      parsed == null ||
+      (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+    ) {
+      throw new Error('Linux DO 回调地址必须是有效的 HTTP(S) URL')
+    }
   }
   if (form.initialProbeOnRegister && !form.registerProbeProfileIds.length) {
     throw new Error('注册后探针至少选择一个探针方案')

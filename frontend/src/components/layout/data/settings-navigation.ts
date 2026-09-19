@@ -74,7 +74,7 @@ export const settingsSections = [
     value: 'integrations',
     href: '/settings/integrations',
     title: '注册联动',
-    description: '注册接入、导入探针和首次探针策略。',
+    description: '注册接入、导入探针、首次探针和 Linux DO Connect。',
     icon: Workflow,
   },
   {

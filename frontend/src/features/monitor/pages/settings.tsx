@@ -231,6 +231,7 @@ export function SettingsLayout() {
       | 'grokRegisterWebhookToken'
       | 'ssoProxy'
       | 'wechatAppSecret'
+      | 'linuxdoOauthClientSecret'
     >
     set(field, '' as SettingsForm[typeof field])
   }

@@ -244,6 +244,7 @@ SecretSettingName = Literal[
     "grokRegisterWebhookToken",
     "ssoProxy",
     "wechatAppSecret",
+    "linuxdoOauthClientSecret",
 ]
 
 
@@ -385,6 +386,18 @@ class RuntimeSettingsInput(BaseModel):
     )
     wechat_template_id: str | None = Field(
         default=None, alias="wechatTemplateId", max_length=256
+    )
+    linuxdo_oauth_enabled: bool | None = Field(
+        default=None, alias="linuxdoOauthEnabled"
+    )
+    linuxdo_oauth_client_id: str | None = Field(
+        default=None, alias="linuxdoOauthClientId", max_length=256
+    )
+    linuxdo_oauth_client_secret: str | None = Field(
+        default=None, alias="linuxdoOauthClientSecret", max_length=256
+    )
+    linuxdo_oauth_redirect_uri: str | None = Field(
+        default=None, alias="linuxdoOauthRedirectUri", max_length=2000
     )
     scheduler_enabled: bool | None = Field(default=None, alias="schedulerEnabled")
     quarantine_recovery_enabled: bool | None = Field(
@@ -593,6 +606,7 @@ class RuntimeSettingsInput(BaseModel):
             "grok_register_webhook_token",
             "sso_proxy",
             "wechat_app_secret",
+            "linuxdo_oauth_client_secret",
         ):
             if result.get(key) == "":
                 result.pop(key)
@@ -601,6 +615,7 @@ class RuntimeSettingsInput(BaseModel):
             "grokRegisterWebhookToken": "grok_register_webhook_token",
             "ssoProxy": "sso_proxy",
             "wechatAppSecret": "wechat_app_secret",
+            "linuxdoOauthClientSecret": "linuxdo_oauth_client_secret",
         }
         for alias in self.clear_secrets:
             result[clear_mapping[alias]] = ""

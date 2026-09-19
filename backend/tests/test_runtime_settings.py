@@ -795,6 +795,60 @@ def test_sso_proxy_is_encrypted_masked_and_clearable(tmp_path: Path):
     assert service.public_view()["ssoProxyConfigured"] is False
 
 
+def test_linuxdo_oauth_requires_connect_values_and_masks_secret(tmp_path: Path):
+    database, settings, service = build_service(tmp_path)
+    with pytest.raises(ValueError, match="Client ID、Client Secret、回调地址"):
+        service.update({"linuxdo_oauth_enabled": True})
+
+    changed = service.update(
+        {
+            "linuxdo_oauth_enabled": True,
+            "linuxdo_oauth_client_id": "linuxdo-client",
+            "linuxdo_oauth_client_secret": "linuxdo-secret",
+            "linuxdo_oauth_redirect_uri": (
+                "http://127.0.0.1:8090/api/public/linuxdo/callback"
+            ),
+        }
+    )
+    assert changed == [
+        "linuxdo_oauth_client_id",
+        "linuxdo_oauth_client_secret",
+        "linuxdo_oauth_enabled",
+        "linuxdo_oauth_redirect_uri",
+    ]
+    public = service.public_view()
+    assert public["linuxdoOauthEnabled"] is True
+    assert public["linuxdoOauthClientId"] == "linuxdo-client"
+    assert public["linuxdoOauthClientSecretConfigured"] is True
+    assert "linuxdo-secret" not in json.dumps(public)
+    assert service.reveal_secret("linuxdoOauthClientSecret") == "linuxdo-secret"
+
+    with database.session() as session:
+        stored = session.scalar(
+            select(AppSetting).where(AppSetting.key == "linuxdo_oauth_client_secret")
+        )
+        assert stored is not None
+        assert "linuxdo-secret" not in json.dumps(stored.value)
+
+    keep = RuntimeSettingsInput(linuxdoOauthClientSecret="")
+    assert "linuxdo_oauth_client_secret" not in keep.runtime_changes()
+    clear = RuntimeSettingsInput(clearSecrets=["linuxdoOauthClientSecret"])
+    assert clear.runtime_changes()["linuxdo_oauth_client_secret"] == ""
+
+
+def test_linuxdo_oauth_rejects_invalid_callback_url(tmp_path: Path):
+    _database, _settings, service = build_service(tmp_path)
+    with pytest.raises(ValueError, match="回调地址"):
+        service.update(
+            {
+                "linuxdo_oauth_enabled": True,
+                "linuxdo_oauth_client_id": "linuxdo-client",
+                "linuxdo_oauth_client_secret": "linuxdo-secret",
+                "linuxdo_oauth_redirect_uri": "not-a-url",
+            }
+        )
+
+
 def test_invalid_sso_proxy_is_rejected(tmp_path: Path):
     _database, _settings, service = build_service(tmp_path)
     with pytest.raises(ValueError, match="代理"):

@@ -14,6 +14,10 @@ EXPECTED_ROUTES = {
     ("GET", "/api/auth/me"),
     ("POST", "/api/auth/logout"),
     ("GET", "/api/health"),
+    ("GET", "/api/public/linuxdo/status"),
+    ("GET", "/api/public/linuxdo/login"),
+    ("GET", "/api/public/linuxdo/callback"),
+    ("GET", "/api/public/linuxdo/logout"),
     ("GET", "/api/public/upstream-accounts"),
     ("POST", "/api/public/client-key-quota"),
     ("POST", "/api/public/client-key-usage"),
@@ -116,6 +120,10 @@ PUBLIC_PATHS = {
     "/api/auth/setup",
     "/api/auth/login",
     "/api/health",
+    "/api/public/linuxdo/status",
+    "/api/public/linuxdo/login",
+    "/api/public/linuxdo/callback",
+    "/api/public/linuxdo/logout",
     "/api/public/upstream-accounts",
     "/api/public/client-key-quota",
     "/api/public/client-key-usage",
@@ -145,6 +153,7 @@ def build_test_router():
         register_integration=MagicMock(),
         wechat_notifications=MagicMock(),
         updates=MagicMock(),
+        linuxdo_oauth=MagicMock(),
     )
 
 

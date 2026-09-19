@@ -4,3 +4,5 @@ coverage/
 .vitest-attachments/
 *.log
 .env*
+**/*.test.ts
+**/*.test.tsx

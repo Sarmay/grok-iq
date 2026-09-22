@@ -388,6 +388,10 @@ export function authorizationHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
+function skipAuthUnlessAdmin() {
+  return !authorizationHeaders().Authorization
+}
+
 export function notifyAuthenticationRequired(setupRequired = false) {
   useAuthStore.getState().auth.reset()
   if (typeof window !== 'undefined') {
@@ -2956,7 +2960,7 @@ export const api = {
   linuxdoLogoutUrl: () => `${API_BASE}/public/linuxdo/logout`,
   publicUpstreamAccounts: () =>
     request<PublicUpstreamAccountSummary>('/public/upstream-accounts', {
-      skipAuth: !authorizationHeaders().Authorization,
+      skipAuth: skipAuthUnlessAdmin(),
     }),
   publicUpstreamUsage: (params?: {
     period?: PublicUpstreamUsagePeriod
@@ -2970,13 +2974,13 @@ export const api = {
     const suffix = query.toString() ? `?${query.toString()}` : ''
     return request<PublicUpstreamUsageOverview>(
       `/public/upstream-usage${suffix}`,
-      { skipAuth: true }
+      { skipAuth: skipAuthUnlessAdmin() }
     )
   },
   lookupPublicClientKeyQuota: (apiKey: string) =>
     request<PublicClientKeyQuotaLookup>('/public/client-key-quota', {
       method: 'POST',
-      skipAuth: true,
+      skipAuth: skipAuthUnlessAdmin(),
       body: JSON.stringify({ apiKey }),
     }),
   lookupPublicClientKeyUsage: (params: {
@@ -2987,7 +2991,7 @@ export const api = {
   }) =>
     request<PublicClientKeyUsageLookup>('/public/client-key-usage', {
       method: 'POST',
-      skipAuth: true,
+      skipAuth: skipAuthUnlessAdmin(),
       body: JSON.stringify({
         apiKey: params.apiKey,
         period: params.period,

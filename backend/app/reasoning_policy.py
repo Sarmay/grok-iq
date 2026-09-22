@@ -45,6 +45,14 @@ DEFAULT_REASONING_MODEL_POLICIES: tuple[ReasoningModelPolicy, ...] = (
         "required",
         media_input_mode="observe",
     ),
+    ReasoningModelPolicy("Build/grok-4.7", "chat", "required"),
+    ReasoningModelPolicy("Build/grok-4.7", "responses", "required"),
+    ReasoningModelPolicy(
+        "Build/grok-4.7",
+        "messages",
+        "required",
+        media_input_mode="observe",
+    ),
     ReasoningModelPolicy("Build/grok-composer-2.5-fast", "*", "observe"),
     ReasoningModelPolicy("*", "*", "observe"),
 )
@@ -52,6 +60,66 @@ DEFAULT_REASONING_MODEL_POLICIES: tuple[ReasoningModelPolicy, ...] = (
 
 def default_reasoning_model_policies() -> list[dict[str, Any]]:
     return [policy.public_dict() for policy in DEFAULT_REASONING_MODEL_POLICIES]
+
+
+def _policy_key(item: Mapping[str, Any]) -> tuple[str, str]:
+    return (
+        canonical_reasoning_model(str(item.get("model") or "")),
+        str(item.get("operation") or "*").strip().lower(),
+    )
+
+
+def _reasoning_policy_insert_index(
+    policies: list[Mapping[str, Any]],
+    model: str,
+) -> int:
+    last_same_model: int | None = None
+    fallback = len(policies)
+    for index, item in enumerate(policies):
+        current = canonical_reasoning_model(str(item.get("model") or ""))
+        if current == model:
+            last_same_model = index
+        elif last_same_model is None and current in {"*", "grok-composer-2.5-fast"}:
+            fallback = min(fallback, index)
+    if last_same_model is not None:
+        return last_same_model + 1
+    return fallback
+
+
+def merge_missing_default_reasoning_policies(
+    stored: list[Mapping[str, Any]],
+    *,
+    models: Iterable[str],
+) -> list[Mapping[str, Any]]:
+    """Insert built-in policies whose model and operation are absent.
+
+    Saved rows stay as the operator left them. New rows for a model that
+    already has at least one rule are placed after that model's last rule.
+    Otherwise they are inserted before the composer or wildcard rule.
+    """
+
+    if not all(isinstance(item, Mapping) for item in stored):
+        return stored
+    wanted = {
+        canonical_reasoning_model(model)
+        for model in models
+        if canonical_reasoning_model(model) not in {"", "*"}
+    }
+    present = {_policy_key(item) for item in stored}
+    additions_by_model: dict[str, list[dict[str, Any]]] = {}
+    for policy in DEFAULT_REASONING_MODEL_POLICIES:
+        model = canonical_reasoning_model(policy.model)
+        if model not in wanted or (model, policy.operation) in present:
+            continue
+        additions_by_model.setdefault(model, []).append(policy.public_dict())
+    if not additions_by_model:
+        return stored
+
+    result: list[Mapping[str, Any]] = list(stored)
+    for model, additions in additions_by_model.items():
+        insert_at = _reasoning_policy_insert_index(result, model)
+        result[insert_at:insert_at] = additions
+    return result
 
 
 def _value(raw: Mapping[str, Any], snake: str, camel: str, default: Any) -> Any:

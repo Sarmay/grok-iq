@@ -853,3 +853,45 @@ def test_invalid_sso_proxy_is_rejected(tmp_path: Path):
     _database, _settings, service = build_service(tmp_path)
     with pytest.raises(ValueError, match="代理"):
         service.update({"sso_proxy": "not-a-proxy"})
+
+
+def test_saved_reasoning_policies_gain_grok_4_7_once(tmp_path: Path):
+    database, _settings, service = build_service(tmp_path)
+    stored = [
+        policy
+        for policy in service.settings.reasoning_model_policies
+        if policy["model"] != "Build/grok-4.7"
+    ]
+    for policy in stored:
+        if policy["model"] == "Build/grok-4.6" and policy["operation"] == "chat":
+            policy["minCount"] = 7
+    service.repository.save({"reasoning_model_policies": stored})
+
+    reloaded_settings = Settings(database_path=tmp_path / "grokiq.db")
+    reloaded = RuntimeSettingsService(
+        reloaded_settings,
+        SettingsRepository(database, reloaded_settings),
+    )
+    reloaded.load()
+
+    policies = reloaded_settings.reasoning_model_policies
+    by_key = {(item["model"], item["operation"]): item for item in policies}
+    assert by_key[("Build/grok-4.7", "chat")]["mode"] == "required"
+    assert by_key[("Build/grok-4.7", "responses")]["mode"] == "required"
+    assert by_key[("Build/grok-4.7", "messages")]["mediaInputMode"] == "observe"
+    assert by_key[("Build/grok-4.6", "chat")]["minCount"] == 7
+
+    reloaded.load()
+    assert reloaded_settings.reasoning_model_policies == policies
+
+
+def test_unsaved_reasoning_policies_do_not_freeze_the_default_list(tmp_path: Path):
+    _database, settings, service = build_service(tmp_path)
+
+    service.load()
+
+    assert any(
+        item["model"] == "Build/grok-4.7" and item["operation"] == "chat"
+        for item in settings.reasoning_model_policies
+    )
+    assert "reasoning_model_policies" not in service.repository.load()

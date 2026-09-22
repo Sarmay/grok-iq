@@ -11,10 +11,12 @@ from app.core.config import (
     normalize_probe_tps_override_mode,
 )
 from app.persistence.settings_repository import SettingsRepository
+from app.reasoning_policy import merge_missing_default_reasoning_policies
 from app.services.runtime_settings_validator import RuntimeSettingsValidator
 
 REGISTER_FIXED_STRATEGY_MIGRATION_KEY = "register_probe_fixed_strategy_v2"
 PROBE_TPS_OVERRIDE_DEFAULT_MODE_KEY = "probe_tps_override_missing_reasoning_default_v1"
+REASONING_GROK_47_POLICY_MIGRATION_KEY = "reasoning_model_policy_grok_4_7_v1"
 INITIAL_ONBOARDING_COMPLETED_KEY = "initial_onboarding_completed_v1"
 RISK_RULE_SWITCH_FIELDS = {
     "reasoning_zero": "reasoning_zero_risk_enabled",
@@ -79,6 +81,23 @@ class RuntimeSettingsService:
                 self.repository.save(migrated)
             self.repository.mark_migration_applied(
                 PROBE_TPS_OVERRIDE_DEFAULT_MODE_KEY
+            )
+        if not self.repository.migration_applied(
+            REASONING_GROK_47_POLICY_MIGRATION_KEY
+        ):
+            stored_policies = overrides.get("reasoning_model_policies")
+            if isinstance(stored_policies, list):
+                merged_policies = merge_missing_default_reasoning_policies(
+                    stored_policies,
+                    models=("grok-4.7",),
+                )
+                if merged_policies != stored_policies:
+                    overrides["reasoning_model_policies"] = merged_policies
+                    self.repository.save(
+                        {"reasoning_model_policies": merged_policies}
+                    )
+            self.repository.mark_migration_applied(
+                REASONING_GROK_47_POLICY_MIGRATION_KEY
             )
         if not overrides:
             return

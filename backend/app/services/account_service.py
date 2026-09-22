@@ -1677,7 +1677,9 @@ def _public_provider_capacity(value: Any) -> dict[str, int]:
     available = _count(payload.get("available"))
     if total <= 0:
         return {"capacity": 0}
-    return {"capacity": round(available / total * 100)}
+    # Round half up with integer arithmetic: a 62.5% headroom reads as 63%,
+    # whereas Python's round() would give the banker's-rounding result 62.
+    return {"capacity": (200 * available + total) // (2 * total)}
 
 
 def _public_upstream_summary(raw: Any, *, reachable: bool) -> dict[str, Any]:

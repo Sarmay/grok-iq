@@ -35,6 +35,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { IconBadge } from '@/components/ui/icon-badge'
 import { Input } from '@/components/ui/input'
 import {
   Sheet,
@@ -48,7 +49,6 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import { IconBadge } from '@/components/ui/icon-badge'
 import { ActionToolbar, ToolbarAction } from '@/components/action-toolbar'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { EnabledBadge } from '@/components/enabled-badge'
@@ -431,11 +431,7 @@ function ProfileCard({
                 className='size-7'
               />
             ) : null}
-            <ToolbarAction
-              label='编辑方案'
-              disabled={pending}
-              onClick={onEdit}
-            >
+            <ToolbarAction label='编辑方案' disabled={pending} onClick={onEdit}>
               <Edit3 />
             </ToolbarAction>
             <ToolbarAction
@@ -454,7 +450,7 @@ function ProfileCard({
           <div className='font-mono text-[11px] text-primary'>
             {profile.model}
           </div>
-          <div className='mt-1.5 line-clamp-3 whitespace-pre-wrap text-xs leading-5'>
+          <div className='mt-1.5 line-clamp-3 text-xs leading-5 whitespace-pre-wrap'>
             {profile.prompt}
           </div>
         </div>
@@ -663,7 +659,7 @@ function ProfileDialog({
             <Field
               label='自动校验标记'
               htmlFor='profile-expected-text'
-              description='回复包含该字符串时记为匹配；留空则跳过此项自动校验。'
+              description='回复包含该字符串时记为匹配，忽略大小写、全角半角和空白；留空则跳过此项自动校验。'
             >
               <Input
                 id='profile-expected-text'

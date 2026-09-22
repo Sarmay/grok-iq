@@ -21,12 +21,23 @@ DEFAULT_PROFILES_UNLIMITED_MIGRATION_KEY = "default_probe_profiles_follow_upstre
 DEFAULT_PROFILES_EXPECTED_OUTPUT_MIGRATION_KEY = "default_probe_profiles_expected_output_v1"
 DEFAULT_QUALITY_MARKER_MIGRATION_KEY = "default_probe_profiles_quality_marker_cn_v1"
 DEFAULT_HTML_PREVIEW_MIGRATION_KEY = "default_probe_profiles_html_preview_pelican_v1"
+DEFAULT_HTML_PREVIEW_MARKER_MIGRATION_KEY = "default_probe_profiles_html_preview_svg_marker_v1"
+DEFAULT_REASONING_CHECK_MIGRATION_KEY = "default_probe_profiles_reasoning_check_hidden_answer_v1"
 PROBE_DURATION_ESTIMATE_BACKFILL_KEY = "probe_duration_estimates_backfill_v1"
 SAFE_CURRENT_EGRESS_MIGRATION_KEY = "probe_targets_current_egress_v1"
 LEGACY_QUALITY_MARKER_FIELDS = {
     "prompt": "先用三点总结为什么天空呈蓝色，最后一行只输出 QUALITY_OK。",
     "expected_text": "QUALITY_OK",
     "expected_output": "最后一行应包含 `QUALITY_OK`。",
+}
+# The DOCTYPE marker failed on the lowercase ``<!doctype html>`` many models
+# emit and on pure-SVG answers such as the profile's own reference output.
+LEGACY_HTML_PREVIEW_MARKER_FIELDS = {"expected_text": "<!DOCTYPE html>"}
+# The original prompt spelled out the answer, so a degraded model could echo
+# ``RESULT=53`` without computing anything.
+LEGACY_REASONING_CHECK_FIELDS = {
+    "prompt": "有 3 个盒子，各装 4 个袋子，每袋 5 个球。移走 7 个后剩多少？解释后最后输出 RESULT=53。",
+    "expected_output": "计算结果应为 **53**，最后输出 `RESULT=53`。",
 }
 LEGACY_HTML_PREVIEW_FIELDS = {
     "name": "HTML 生成基线",
@@ -73,6 +84,18 @@ class ProbeCatalogSeeder:
             key=DEFAULT_HTML_PREVIEW_MIGRATION_KEY,
             profile_id="html-preview",
             legacy_fields=LEGACY_HTML_PREVIEW_FIELDS,
+        )
+        self._apply_profile_field_migration(
+            session,
+            key=DEFAULT_HTML_PREVIEW_MARKER_MIGRATION_KEY,
+            profile_id="html-preview",
+            legacy_fields=LEGACY_HTML_PREVIEW_MARKER_FIELDS,
+        )
+        self._apply_profile_field_migration(
+            session,
+            key=DEFAULT_REASONING_CHECK_MIGRATION_KEY,
+            profile_id="reasoning-check",
+            legacy_fields=LEGACY_REASONING_CHECK_FIELDS,
         )
         self._backfill_duration_estimates(session)
         self._migrate_current_egress_targets(session)

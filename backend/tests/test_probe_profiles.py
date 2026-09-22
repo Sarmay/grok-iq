@@ -89,6 +89,14 @@ class ReasoningSummaryDoneStreamResponse(StubStreamResponse):
         )
 
 
+class NoUsageDetailsStreamResponse(StubStreamResponse):
+    async def aiter_content(self, *args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+        yield b'data: {"type":"response.output_text.delta","delta":"result = 53"}\n\n'
+        yield (
+            b'data: {"type":"response.completed","response":{"usage":{"output_tokens":40}}}\n\n'
+        )
+
+
 class HangingAfterCompleteResponse:
     status_code = 200
     headers: dict[str, str] = {}
@@ -127,6 +135,88 @@ class StubStreamSession:
         self.request_body["_url"] = url
         self.request_body["_headers"] = dict(kwargs.get("headers") or {})
         return StubStreamResponse()
+
+
+def _session_factory(response_cls: type, request_body: dict[str, Any]):
+    class Session(StubStreamSession):
+        async def post(self, url: str, *, json: dict[str, Any], **kwargs: Any):
+            self.url = url
+            self.request_body.update(json)
+            return response_cls()
+
+    return lambda: Session(request_body)
+
+
+@pytest.mark.asyncio
+async def test_chat_probe_marker_is_tolerant_and_reasoning_flag_follows_audit(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    client = Grok2APIClient(Settings())
+    monkeypatch.setattr(
+        client, "_session", _session_factory(NoUsageDetailsStreamResponse, {})
+    )
+
+    async def find_audit(_: str) -> dict[str, Any]:
+        return {
+            "id": "1",
+            "accountId": "7",
+            "egressNodeId": "2",
+            "outputTokens": 40,
+            "reasoningTokens": 0,
+            "firstTokenMs": 800,
+            "durationMs": 2000,
+            "outputTokensPerSecond": 33.3,
+        }
+
+    monkeypatch.setattr(client, "find_audit", find_audit)
+
+    result = await client.chat_probe(
+        api_key="key",
+        public_model="model",
+        account_id=7,
+        system_prompt="",
+        prompt="prompt",
+        expected="RESULT=53",
+        max_output_tokens=0,
+        temperature=None,
+        extra_body={},
+    )
+
+    assert result.expected_matched is True
+    assert result.reasoning_tokens_reported is True
+    assert result.reasoning_tokens == 0
+    assert result.output_tokens == 40
+
+
+def test_default_profile_markers_migrate_once_and_keep_custom_values(tmp_path: Path):
+    database = Database(tmp_path / "grokiq.db")
+    database.initialize()
+    legacy_prompt = (
+        "有 3 个盒子，各装 4 个袋子，每袋 5 个球。移走 7 个后剩多少？解释后最后输出 RESULT=53。"
+    )
+    with database.transaction() as session:
+        for values in DEFAULT_PROFILES:
+            override: dict[str, Any] = {}
+            if values["id"] == "reasoning-check":
+                override = {"prompt": legacy_prompt}
+            elif values["id"] == "html-preview":
+                override = {"expected_text": "<!DOCTYPE html>"}
+            session.add(ProbeProfile(**(values | override)))
+
+    repository = ProbeRepository(database)
+    repository.seed_defaults()
+
+    reasoning = repository.get_profile("reasoning-check")
+    assert "RESULT=53" not in reasoning["prompt"]
+    assert reasoning["expected_text"] == "RESULT=53"
+    assert repository.get_profile("html-preview")["expected_text"] == "<svg"
+
+    repository.update_profile("reasoning-check", {"prompt": "custom prompt"})
+    repository.update_profile("html-preview", {"expected_text": "<html"})
+    repository.seed_defaults()
+
+    assert repository.get_profile("reasoning-check")["prompt"] == "custom prompt"
+    assert repository.get_profile("html-preview")["expected_text"] == "<html"
 
 
 def test_profile_input_follows_upstream_output_limit_by_default():

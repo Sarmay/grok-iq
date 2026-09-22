@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from app.integrations.grok2api.http_session import abort_curl_stream
+from app.marker_match import expected_marker_matched
 
 
 @dataclass(slots=True)
@@ -404,7 +405,7 @@ class ChatProbeRunner:
             generation_ms=generation_ms,
             first_token_share=first_token_ms / duration_ms if duration_ms else 0.0,
             tps=tps,
-            expected_matched=expected in response_text if expected else True,
+            expected_matched=expected_marker_matched(expected, response_text),
             usage=usage,
         )
 
@@ -459,6 +460,13 @@ class ChatProbeRunner:
 
         output_tokens = integer("outputTokens", result.output_tokens)
         reasoning_tokens = integer("reasoningTokens", result.reasoning_tokens)
+        # The audit row carries the upstream reasoning count even when the
+        # streamed usage block omitted the detail field. Treat it as reported
+        # so a zero can be evaluated by the reasoning policy.
+        reasoning_tokens_reported = bool(
+            result.reasoning_tokens_reported
+            or audit.get("reasoningTokens") is not None
+        )
         first_token_ms = max(0, integer("firstTokenMs", result.first_token_ms))
         duration_ms = max(0, integer("durationMs", result.duration_ms))
         generation_ms = max(
@@ -482,6 +490,7 @@ class ChatProbeRunner:
             status_code=status_code,
             output_tokens=output_tokens,
             reasoning_tokens=reasoning_tokens,
+            reasoning_tokens_reported=reasoning_tokens_reported,
             visible_tokens=visible_tokens,
             first_token_ms=first_token_ms,
             duration_ms=duration_ms,

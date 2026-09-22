@@ -12,6 +12,11 @@ from app.reasoning_policy import (
     resolve_reasoning_model_policy,
 )
 
+# Outcomes that carry no evidence about degradation either way. They never
+# count as anomalies, stay out of the measurable-sample denominator and never
+# interrupt a consecutive anomaly or reasoning-zero sequence.
+NEUTRAL_CLASSIFICATIONS = frozenset({"error", "unmeasurable", "insufficient"})
+
 
 @dataclass(slots=True, frozen=True)
 class RuleContext:
@@ -487,10 +492,11 @@ def _rule_marker_miss(context: RuleContext, _thresholds: Thresholds) -> RuleMatc
 def _rule_insufficient_output(
     context: RuleContext, thresholds: Thresholds
 ) -> RuleMatch | None:
-    if (
-        context.scope == "probe"
-        and context.output_tokens < thresholds.minimum_output_tokens
-    ):
+    # A short answer is usually delivered in one network chunk, so its
+    # generation window is a few milliseconds and the resulting TPS is
+    # meaningless. Skip throughput and reasoning evaluation for it in every
+    # scope; the reasoning-zero rule applies the same minimum on its own.
+    if context.output_tokens < thresholds.minimum_output_tokens:
         return RuleMatch("insufficient")
     return None
 
@@ -689,9 +695,8 @@ for _builtin_rule in (
     RiskRule(
         "insufficient_output",
         "输出不足",
-        "探针输出 Token 少于最低要求",
+        "输出 Token 少于最低要求；短回复的生成窗口只有几毫秒，不评估 TPS 与思考输出",
         _rule_insufficient_output,
-        scopes=frozenset({"probe"}),
         priority=40,
     ),
     RiskRule(
@@ -1152,7 +1157,12 @@ def classify_audit_sample(
             )
         else:
             rule, match = evaluated
-            if match.classification in {"error", "unmeasurable", "normal"}:
+            if match.classification in {
+                "error",
+                "unmeasurable",
+                "insufficient",
+                "normal",
+            }:
                 classification = _match_classification(
                     rule=rule,
                     match=match,
@@ -1198,9 +1208,32 @@ def maximum_anomaly_streak(
         if name in active_names:
             current += 1
             maximum = max(maximum, current)
-        elif name not in {"error", "unmeasurable", "insufficient"}:
+        elif name not in NEUTRAL_CLASSIFICATIONS:
             current = 0
     return maximum
+
+
+def trailing_anomaly_streak(
+    classifications: Iterable[str],
+    anomaly_names: set[str] | frozenset[str] | None = None,
+) -> int:
+    """Count the anomalies at the end of the sample sequence.
+
+    Unlike ``maximum_anomaly_streak`` this reflects the account's current
+    state: a retest that returns normal samples ends the consecutive
+    condition instead of pinning the account to ``suspect`` for the whole
+    analysis window. Neutral outcomes (error, unmeasurable, insufficient)
+    leave the sequence intact.
+    """
+
+    active_names = anomaly_names or active_anomaly_classifications()
+    current = 0
+    for name in classifications:
+        if name in active_names:
+            current += 1
+        elif name not in NEUTRAL_CLASSIFICATIONS:
+            current = 0
+    return current
 
 
 def risk_status(
@@ -1224,7 +1257,9 @@ def risk_status(
     repeated = consecutive or cumulative
     strong_repeated = repeated and hard_count >= thresholds.high_risk_hard_count
     if consecutive:
-        reasons.append(f"风险周期连续降智信号达到 {thresholds.consecutive_anomalies} 次")
+        reasons.append(
+            f"风险周期内最近连续降智信号达到 {thresholds.consecutive_anomalies} 次"
+        )
     elif cumulative:
         reasons.append(
             f"风险周期降智信号占比 {anomaly_count}/{sample_count}，达到 "

@@ -9,15 +9,16 @@ from typing import Any
 from sqlalchemy import and_, case, delete, func, or_, select
 
 from app.analyzer import (
+    NEUTRAL_CLASSIFICATIONS,
     SampleMetrics,
     Thresholds,
     active_anomaly_classifications,
     aggregate_rule_reasons,
     classify_sample,
-    maximum_anomaly_streak,
     risk_rule_enabled,
     risk_status,
     rule_metadata,
+    trailing_anomaly_streak,
 )
 from app.core.clock import app_isoformat, ensure_utc, parse_optional_datetime, utc_now
 from app.core.disposition import (
@@ -461,8 +462,7 @@ class AccountRepository:
                 )
                 applicable = bool(
                     reasoning_rule_active
-                    and classified.name
-                    not in {"error", "unmeasurable", "insufficient"}
+                    and classified.name not in NEUTRAL_CLASSIFICATIONS
                     and policy.mode in {"required", "observe"}
                     and 200 <= int(sample.status_code or 0) < 300
                     and bool(sample.reasoning_tokens_reported)
@@ -473,8 +473,13 @@ class AccountRepository:
                     applicable and int(sample.reasoning_tokens or 0) <= 0
                 )
                 reasoning_zero_signals.append(reasoning_zero_detected)
-                if policy.mode != "required" or not applicable:
+                if policy.mode != "required":
                     reasoning_streaks[group_key] = 0
+                elif not applicable:
+                    # Errors, unmeasurable or short samples and rows without a
+                    # reported reasoning field carry no evidence either way.
+                    # Like the anomaly streak they leave the sequence intact.
+                    pass
                 elif int(sample.reasoning_tokens or 0) > 0:
                     reasoning_streaks[group_key] = 0
                 else:
@@ -588,11 +593,22 @@ class AccountRepository:
                 if detected
             ]
             egress_count = len({self._observed_egress_key(row) for row in anomalies})
-            streak = maximum_anomaly_streak(
+            # The trailing streak reflects the account's current state: a
+            # retest that returns normal samples ends the consecutive
+            # condition, while the cumulative rate keeps older evidence.
+            streak = trailing_anomaly_streak(
                 (classified.name for classified in classifications),
                 anomaly_names,
             )
-            measurable = [row for row in rows if row.status == "done" and row.tps > 0]
+            # Neutral outcomes carry no evidence either way, so they stay out
+            # of the anomaly-rate denominator and the TPS statistics.
+            measurable = [
+                row
+                for row, classified in zip(rows, classifications, strict=True)
+                if row.status == "done"
+                and row.tps > 0
+                and classified.name not in NEUTRAL_CLASSIFICATIONS
+            ]
             status, score, reasons = risk_status(
                 anomaly_count=len(anomalies),
                 hard_count=len(hard),

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from app.analyzer import (
     MEDIA_INPUT_REASONING_ZERO_REASON,
+    NEUTRAL_CLASSIFICATIONS,
     Classification,
     Thresholds,
     classify_audit_sample,
@@ -2642,6 +2643,7 @@ class RequestAuditService:
             applicable = bool(
                 reasoning_rule_active
                 and account_id is not None
+                and classification.name not in NEUTRAL_CLASSIFICATIONS
                 and policy.mode in {"required", "observe"}
                 and 200 <= _int_or_zero(row.get("status_code")) < 300
                 and not _audit_error_code(row.get("error_code") or row.get("errorCode"))
@@ -2655,8 +2657,13 @@ class RequestAuditService:
             has_media = media_input_blocks_reasoning_action(
                 _int_or_zero(row.get("media_input_images"))
             )
-            if policy.mode != "required" or not applicable or has_media:
+            if policy.mode != "required" or has_media:
                 streaks[group_key] = 0
+            elif not applicable:
+                # Failed, short or unreported rows carry no reasoning evidence
+                # either way and leave the consecutive sequence intact, the
+                # same way errors never interrupt the anomaly streak.
+                pass
             elif _int_or_zero(row.get("reasoning_tokens")) > 0:
                 streaks[group_key] = 0
             else:

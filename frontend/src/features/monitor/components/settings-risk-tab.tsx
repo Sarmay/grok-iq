@@ -516,7 +516,7 @@ function ProbeScoringPanel({
           />
           <RiskFactorRow
             title='连续信号'
-            description='按分析窗口内最大连续异常次数逐次加分，中间的正常可测样本会中断连续计数。'
+            description='按最近连续异常次数逐次加分，中间的正常可测样本会中断连续计数；复测正常后归零。'
             weight={form.riskStreakWeight}
             cap={form.riskStreakCap}
             onWeightChange={(value) => set('riskStreakWeight', value)}
@@ -602,7 +602,8 @@ function AuditRulesPanel({
         <p className='text-xs leading-5 text-muted-foreground'>
           例如 <span className='font-mono text-foreground'>10</span> 会先于{' '}
           <span className='font-mono text-foreground'>100</span>{' '}
-          执行；它们只控制规则先后，不会给账号加分。思考连续信号由聚合阶段单独累计，因此不会被 TPS 主分类遮蔽。
+          执行；它们只控制规则先后，不会给账号加分。思考连续信号由聚合阶段单独累计，因此不会被
+          TPS 主分类遮蔽。
         </p>
         <div className='overflow-hidden rounded-xl border'>
           {form.riskRules.length ? (
@@ -631,7 +632,9 @@ function AuditRulesPanel({
                   >
                     <div className='min-w-0'>
                       <div className='flex flex-wrap items-center gap-2'>
-                        <span className='text-sm font-medium'>{rule.label}</span>
+                        <span className='text-sm font-medium'>
+                          {rule.label}
+                        </span>
                         <Badge variant='outline'>
                           顺序 {override?.priority ?? rule.priority}
                         </Badge>

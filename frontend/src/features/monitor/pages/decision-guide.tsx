@@ -26,17 +26,17 @@ import {
   Zap,
 } from 'lucide-react'
 import { api, type RuntimeSettings } from '@/lib/api'
-import { autoIsolationMinStatusLabel } from '../components/settings-model'
 import { StatusBadge } from '@/lib/status'
-import { MonitorStatusBadge } from '@/components/monitor-status-badge'
-import { EnabledBadge } from '@/components/enabled-badge'
-import { TitledCard } from '@/components/titled-card'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ActionToolbar, ToolbarAction } from '@/components/action-toolbar'
+import { EnabledBadge } from '@/components/enabled-badge'
+import { MonitorStatusBadge } from '@/components/monitor-status-badge'
 import { Page, PageHeader } from '@/components/page'
+import { TitledCard } from '@/components/titled-card'
+import { autoIsolationMinStatusLabel } from '../components/settings-model'
 
 type Thresholds = Pick<
   RuntimeSettings,
@@ -288,7 +288,7 @@ function ThresholdOverview({ thresholds }: { thresholds: Thresholds }) {
 
 function AccountStatusRules({ thresholds }: { thresholds: Thresholds }) {
   const anomalyRate = formatPercent(thresholds.cumulativeAnomalyRate)
-  const repeated = `风险周期连续信号达到 ${thresholds.consecutiveAnomalies} 次，或累计至少 ${thresholds.consecutiveAnomalies} 次且占可测样本 ${anomalyRate} 以上`
+  const repeated = `风险周期内最近连续信号达到 ${thresholds.consecutiveAnomalies} 次，或累计至少 ${thresholds.consecutiveAnomalies} 次且占可测样本 ${anomalyRate} 以上；复测正常后连续条件会退出，请求错误、无法测量和样本不足不计入可测样本`
 
   return (
     <TitledCard
@@ -405,7 +405,7 @@ function RiskFormula({ thresholds }: { thresholds: Thresholds }) {
     ],
     [
       '连续信号',
-      `最大连续降智信号数 × ${formatNumber(thresholds.riskStreakWeight)}`,
+      `最近连续降智信号数 × ${formatNumber(thresholds.riskStreakWeight)}`,
       `最高 ${formatNumber(thresholds.riskStreakCap)}`,
     ],
   ]
@@ -494,17 +494,22 @@ function SampleClassificationRules({ thresholds }: { thresholds: Thresholds }) {
       title: '预期缺失',
       badge: <StatusBadge value='marker_miss' />,
       summary: '探针方案设置的自动校验标记没有出现在回复中。',
-      conditions: ['优先于长度和 TPS 判断', '计为强降智信号'],
+      conditions: [
+        '匹配时忽略大小写、全角半角和空白',
+        '优先于长度和 TPS 判断',
+        '计为强降智信号',
+      ],
       tone: 'danger',
     },
     {
       icon: Layers3,
       title: '样本不足',
       badge: <StatusBadge value='insufficient' />,
-      summary: `输出 Token 少于 ${thresholds.minimumOutputTokens}，证据长度不足。`,
+      summary: `输出 Token 少于 ${thresholds.minimumOutputTokens}，证据长度不足；短回复的生成窗口只有几毫秒，不评估 TPS 与思考输出，请求审计同样适用。`,
       conditions: [
         '任务中心标记为异常提示',
         '不计入账号降智信号',
+        '不计入可测样本与异常占比分母',
         '不会打断既有连续信号序列',
         '注册联动不会恢复 grok2api 优先级',
       ],
@@ -812,7 +817,11 @@ function UpstreamStatusRules() {
           title='快速出口质量探针'
           badge={<Badge variant='info'>quality-test</Badge>}
           summary='诊断指定节点的 quality-test 接口，因此必须选择已配置代理的出口节点。'
-          conditions={['没有诊断出口时改用完整对话的账号当前出口定检']}
+          conditions={[
+            '提示词只要求输出几个字，用于出口连通性与标记校验',
+            '输出通常达不到最低 Token，不检测思考缺失，也不评估 TPS',
+            '没有诊断出口时改用完整对话的账号当前出口定检',
+          ]}
           tone='info'
         />
         <RuleCard

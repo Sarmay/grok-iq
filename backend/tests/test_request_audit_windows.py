@@ -156,6 +156,27 @@ def test_required_text_reasoning_zero_still_auto_disables():
     assert [item.get("_risk_rule_id") for item in candidates] == ["reasoning_zero"]
 
 
+def test_required_reasoning_streak_survives_failed_rows():
+    service = RequestAuditService(
+        settings=Settings(_env_file=None),
+        client=MagicMock(),
+        repository=MagicMock(),
+    )
+    records = _audit_records(operation="chat", images=0, tps=40, count=3)
+    records[1]["status_code"] = 502
+    records[1]["output_tokens"] = 0
+
+    evaluations = service._audit_risk_evaluations(records)
+
+    failed = evaluations["2"]
+    assert failed.classification.name == "error"
+    assert failed.reasoning_streak == 0
+    latest = evaluations["3"]
+    assert latest.reasoning_streak == 2
+    assert latest.classification.name == "high"
+    assert latest.classification.rule_id == "reasoning_zero"
+
+
 def test_required_media_input_reasoning_zero_does_not_auto_disable():
     service = RequestAuditService(
         settings=Settings(_env_file=None),

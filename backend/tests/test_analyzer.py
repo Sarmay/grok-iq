@@ -3,8 +3,10 @@ from app.analyzer import (
     Thresholds,
     classify_audit_sample,
     classify_sample,
+    maximum_anomaly_streak,
     risk_rule_definitions,
     risk_status,
+    trailing_anomaly_streak,
 )
 
 
@@ -455,6 +457,52 @@ def test_risk_rule_catalog_exposes_order_and_scope():
         value["id"] == "reasoning_zero" and value["enabled"]
         for value in values
     )
+
+
+def test_trailing_streak_ends_after_normal_samples():
+    names = ["fast_risk", "fast_risk", "fast_risk", "normal", "normal"]
+
+    assert maximum_anomaly_streak(names) == 3
+    assert trailing_anomaly_streak(names) == 0
+
+
+def test_trailing_streak_ignores_neutral_samples():
+    names = ["normal", "elevated", "error", "insufficient", "unmeasurable", "elevated"]
+
+    assert trailing_anomaly_streak(names) == 2
+    assert maximum_anomaly_streak(names) == 2
+
+
+def test_audit_short_output_is_not_throughput_evidence():
+    burst = classify_audit_sample(
+        status_code=200,
+        output_tokens=17,
+        reasoning_tokens=0,
+        first_token_ms=3096,
+        duration_ms=3123,
+        tps=629.6,
+        thresholds=Thresholds(),
+        extra={
+            "model_upstream_model": "Build/grok-4.6",
+            "operation": "responses",
+            "reasoning_tokens_reported": True,
+        },
+    )
+    assert burst.name == "insufficient"
+    assert burst.anomalous is False
+    assert burst.rule_id == "insufficient_output"
+
+    sustained = classify_audit_sample(
+        status_code=200,
+        output_tokens=155,
+        reasoning_tokens=0,
+        first_token_ms=3096,
+        duration_ms=3330,
+        tps=662.0,
+        thresholds=Thresholds(),
+    )
+    assert sustained.name == "high"
+    assert sustained.rule_id == "fast_risk"
 
 
 def test_repeated_strong_signals_become_high_risk():

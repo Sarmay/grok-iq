@@ -602,7 +602,7 @@ function ProfileDialog({
                 }}
                 value={form.model}
                 onChange={(event) => set('model', event.target.value)}
-                placeholder='例如：grok-4.7'
+                placeholder='例如：grok-4.5'
                 aria-invalid={Boolean(errors.model)}
                 aria-describedby={
                   errors.model ? 'profile-model-error' : undefined

@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -8,7 +9,8 @@ import pytest
 from app.core.config import Settings
 from app.integrations.grok2api.client import Grok2APIClient, IntegrationError
 from app.persistence.database import Database
-from app.persistence.models import ProbeProfile
+from app.persistence.models import MetadataRow, ProbeProfile
+from app.persistence.probe_catalog_seeder import DEFAULT_PROFILES_MODEL_REVERT_MIGRATION_KEY
 from app.persistence.probe_repository import ProbeRepository
 from app.persistence.seeds import DEFAULT_PROFILES
 from app.web.schemas import ProfileInput
@@ -219,31 +221,39 @@ def test_default_profile_markers_migrate_once_and_keep_custom_values(tmp_path: P
     assert repository.get_profile("html-preview")["expected_text"] == "<html"
 
 
-def test_default_profiles_move_off_retired_model_once_and_keep_custom_model(
+def test_default_profiles_revert_from_grok_4_7_once_and_keep_custom_model(
     tmp_path: Path,
 ):
     database = Database(tmp_path / "grokiq.db")
     database.initialize()
-    with database.transaction() as session:
-        for values in DEFAULT_PROFILES:
-            override: dict[str, Any] = {"model": "grok-4.5"}
-            if values["id"] == "html-preview":
-                override = {"model": "grok-composer-2.5-fast"}
-            session.add(ProbeProfile(**(values | override)))
-
     repository = ProbeRepository(database)
+    repository.seed_defaults()
+    # Mirror a deployment that ran every earlier migration, including the
+    # retired grok-4.7 switch, but not the revert yet.
+    stale = datetime(2026, 1, 1, tzinfo=UTC)
+    with database.transaction() as session:
+        session.delete(session.get(MetadataRow, DEFAULT_PROFILES_MODEL_REVERT_MIGRATION_KEY))
+        for values in DEFAULT_PROFILES:
+            profile = session.get(ProbeProfile, values["id"])
+            profile.model = "grok-composer-2.5-fast" if values["id"] == "html-preview" else "grok-4.7"
+            profile.updated_at = stale
+
     repository.seed_defaults()
 
     profiles = {profile["id"]: profile for profile in repository.list_profiles()}
-    assert profiles["quality-marker"]["model"] == "grok-4.7"
-    assert profiles["reasoning-check"]["model"] == "grok-4.7"
+    assert all(values["model"] == "grok-4.5" for values in DEFAULT_PROFILES)
+    assert profiles["quality-marker"]["model"] == "grok-4.5"
+    assert profiles["reasoning-check"]["model"] == "grok-4.5"
     assert profiles["html-preview"]["model"] == "grok-composer-2.5-fast"
-    assert all(profile["model"] != "grok-4.5" for profile in profiles.values())
+    assert all(profile["model"] != "grok-4.7" for profile in profiles.values())
+    with database.session() as session:
+        assert session.get(ProbeProfile, "quality-marker").updated_at > stale
+        assert session.get(ProbeProfile, "html-preview").updated_at == stale
 
-    repository.update_profile("quality-marker", {"model": "grok-4.5"})
+    repository.update_profile("quality-marker", {"model": "grok-4.7"})
     repository.seed_defaults()
 
-    assert repository.get_profile("quality-marker")["model"] == "grok-4.5"
+    assert repository.get_profile("quality-marker")["model"] == "grok-4.7"
 
 
 def test_profile_input_follows_upstream_output_limit_by_default():

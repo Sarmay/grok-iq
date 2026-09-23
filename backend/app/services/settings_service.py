@@ -335,6 +335,7 @@ class RuntimeSettingsService:
             "analysisWindowHours": s.analysis_window_hours,
             "degradationTps": s.degradation_tps,
             "strongDegradationTps": s.strong_degradation_tps,
+            "modelTpsThresholds": s.model_tps_thresholds,
             "probeTpsOverrideEnabled": s.probe_tps_override_enabled,
             "probeTpsOverrideMode": s.probe_tps_override_mode,
             "probeTpsOverrideMinFirstTokenMs": (

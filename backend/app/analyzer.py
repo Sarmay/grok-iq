@@ -5,6 +5,12 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any
 
+from app.model_thresholds import (
+    ModelTpsThreshold,
+    default_model_tps_thresholds,
+    normalize_model_tps_thresholds,
+    resolve_model_tps_threshold,
+)
 from app.reasoning_policy import (
     ReasoningModelPolicy,
     default_reasoning_model_policies,
@@ -345,6 +351,12 @@ class Thresholds:
     reasoning_model_policies: tuple[dict[str, Any], ...] | list[dict[str, Any]] = field(
         default_factory=default_reasoning_model_policies
     )
+    # Per-upstream-model replacements for degradation_tps /
+    # strong_degradation_tps.  Matching uses canonical_reasoning_model so
+    # ``Build/grok-4.7`` (audits) and ``grok-4.7`` (probe profiles) agree.
+    model_tps_thresholds: tuple[dict[str, Any], ...] | list[dict[str, Any]] = field(
+        default_factory=default_model_tps_thresholds
+    )
     media_input_observe_enabled: bool = True
     request_audit_risk_enabled: bool = True
     # A list/dict of {id, enabled, priority, ...} overrides.  Unknown IDs are
@@ -359,6 +371,16 @@ class Thresholds:
         compare=False,
     )
     _reasoning_model_policies: tuple[ReasoningModelPolicy, ...] = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _model_tps_thresholds: tuple[ModelTpsThreshold, ...] = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _model_thresholds_cache: dict[str, Thresholds] = field(
         init=False,
         repr=False,
         compare=False,
@@ -379,6 +401,47 @@ class Thresholds:
             "_reasoning_model_policies",
             normalize_reasoning_model_policies(self.reasoning_model_policies),
         )
+        object.__setattr__(
+            self,
+            "_model_tps_thresholds",
+            normalize_model_tps_thresholds(self.model_tps_thresholds),
+        )
+        object.__setattr__(self, "_model_thresholds_cache", {})
+
+    def for_model(
+        self,
+        *,
+        model_upstream_model: str = "",
+        model_public_id: str = "",
+    ) -> Thresholds:
+        """Return thresholds with the sample model's TPS band applied.
+
+        Models without an entry in ``model_tps_thresholds`` keep the global
+        ``degradation_tps`` / ``strong_degradation_tps`` unchanged.
+        """
+
+        entry = resolve_model_tps_threshold(
+            self._model_tps_thresholds,
+            model_upstream_model=model_upstream_model,
+            model_public_id=model_public_id,
+        )
+        if entry is None:
+            return self
+        if (
+            entry.degradation_tps == self.degradation_tps
+            and entry.strong_degradation_tps == self.strong_degradation_tps
+        ):
+            return self
+        key = entry.model
+        cached = self._model_thresholds_cache.get(key)
+        if cached is None:
+            cached = replace(
+                self,
+                degradation_tps=entry.degradation_tps,
+                strong_degradation_tps=entry.strong_degradation_tps,
+            )
+            self._model_thresholds_cache[key] = cached
+        return cached
 
     def reasoning_policy(
         self,
@@ -877,6 +940,10 @@ def probe_tps_override_mode(thresholds: Thresholds) -> str:
 
 
 def classify_sample(sample: SampleMetrics, thresholds: Thresholds) -> Classification:
+    thresholds = thresholds.for_model(
+        model_upstream_model=sample.model_upstream_model,
+        model_public_id=sample.model_public_id,
+    )
     upstream_tps = 0.0
     if sample.first_token_ms is None:
         generation_ms = 0
@@ -1090,6 +1157,11 @@ def classify_audit_sample(
     compatible with the existing request-audit API (``watch``/``high``).
     """
 
+    extra_values = extra or {}
+    thresholds = thresholds.for_model(
+        model_upstream_model=str(extra_values.get("model_upstream_model") or ""),
+        model_public_id=str(extra_values.get("model_public_id") or ""),
+    )
     measured_tps = max(0.0, float(tps or 0.0))
     safe_duration_ms = max(0, int(duration_ms or 0))
     generation_ms = max(0, safe_duration_ms - int(first_token_ms or 0))
@@ -1104,7 +1176,6 @@ def classify_audit_sample(
             or generation_ms < thresholds.min_generation_ms
         )
     )
-    extra_values = extra or {}
     has_reasoning_text = extra_values.get("has_reasoning_text")
     if not isinstance(has_reasoning_text, bool):
         has_reasoning_text = None

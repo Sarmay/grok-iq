@@ -641,3 +641,86 @@ def test_audit_upstream_error_code_is_not_a_successful_2xx():
     assert result.name == "error"
     assert result.rule_id == "http_error"
     assert "upstream_stream_interrupted" in result.reasons[0]
+
+
+PRODUCTION_TPS = {"degradation_tps": 150, "strong_degradation_tps": 240}
+
+
+def _audit_row(tps: float, model: str):
+    return classify_audit_sample(
+        status_code=200,
+        output_tokens=2000,
+        reasoning_tokens=800,
+        first_token_ms=1500,
+        duration_ms=12_000,
+        tps=tps,
+        thresholds=Thresholds(**PRODUCTION_TPS),
+        extra={
+            "model_upstream_model": model,
+            "operation": "chat",
+            "reasoning_tokens_reported": True,
+        },
+    )
+
+
+def test_grok_4_7_audit_uses_model_tps_band():
+    healthy = _audit_row(234, "Build/grok-4.7")
+    elevated = _audit_row(350, "Build/grok-4.7")
+    degraded = _audit_row(700, "Build/grok-4.7")
+
+    assert healthy.name == "normal"
+    assert healthy.rule_id == ""
+    assert elevated.name == "watch"
+    assert elevated.rule_id == "elevated_tps"
+    assert elevated.reasons == ("TPS ≥ 300",)
+    assert degraded.name == "high"
+    assert degraded.hard is True
+    assert degraded.rule_id == "fast_risk"
+    assert degraded.reasons == ("TPS ≥ 600",)
+
+
+def test_other_models_keep_global_tps_thresholds():
+    result = _audit_row(234, "Build/grok-4.5")
+
+    assert result.name == "watch"
+    assert result.reasons == ("TPS ≥ 150",)
+    assert _audit_row(260, "Build/grok-4.5").rule_id == "fast_risk"
+
+
+def test_probe_sample_with_bare_model_id_uses_model_tps_band():
+    def classify(model: str):
+        return classify_sample(
+            SampleMetrics(
+                status_code=200,
+                output_tokens=2000,
+                reasoning_tokens=800,
+                first_token_ms=1500,
+                duration_ms=12_000,
+                egress_key="node:1",
+                expected_matched=True,
+                model_upstream_model=model,
+                reasoning_tokens_reported=True,
+                measured_tps=234,
+                has_reasoning_text=True,
+            ),
+            Thresholds(**PRODUCTION_TPS),
+        )
+
+    assert classify("grok-4.7").name == "normal"
+    assert classify("grok-4.5").name == "elevated"
+
+
+def test_model_tps_band_can_be_disabled_or_replaced():
+    disabled = Thresholds(**PRODUCTION_TPS, model_tps_thresholds=[])
+    custom = Thresholds(
+        **PRODUCTION_TPS,
+        model_tps_thresholds=[
+            {"model": "grok-4.7", "degradationTps": 200, "strongDegradationTps": 400}
+        ],
+    )
+
+    assert disabled.for_model(model_upstream_model="Build/grok-4.7") is disabled
+    resolved = custom.for_model(model_upstream_model="Build/grok-4.7")
+    assert (resolved.degradation_tps, resolved.strong_degradation_tps) == (200, 400)
+    assert custom.for_model(model_upstream_model="Build/grok-4.7") is resolved
+    assert custom.for_model(model_upstream_model="Build/grok-4.5") is custom

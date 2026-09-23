@@ -22,9 +22,11 @@ from app.persistence.probe_repository import (
     RunStateError,
 )
 from app.persistence.register_event_repository import (
+    LIFTABLE_PRIORITY_HOLD_STATUSES,
     PRIORITY_HOLD_HELD,
     PRIORITY_HOLD_NONE,
     PRIORITY_HOLD_RESTORE_FAILED,
+    PRIORITY_HOLD_RESTORED,
     RegisterEventRepository,
 )
 from app.services.account_service import AccountService
@@ -411,6 +413,110 @@ class RegisterIntegrationService:
             return
         await self._restore_priority_hold_if_ready(event_id)
         await self.maybe_enqueue_register_callback(event_id)
+
+    async def maybe_lift_priority_hold_after_clean_run(
+        self, run: dict[str, Any]
+    ) -> bool:
+        """Lift a register priority hold once a later probe run is clean.
+
+        ``run`` is the finished (terminal) run.  The register probe's own
+        verdict (``kept``) is not final: an account that later passes a probe
+        and is enabled in grok2api gets its original priority back.  The hold
+        is only lifted while grok2api still reports the held priority, so an
+        operator's manual change or a different demotion is never clobbered.
+        Returns True when the priority was restored.
+        """
+
+        account_id = int(run.get("account_id") or 0)
+        if account_id <= 0 or not self._register_run_passed(run):
+            return False
+        event = self._liftable_priority_hold(account_id)
+        if event is None:
+            return False
+        event_id = str(event.get("event_id") or "")
+        status = str(event.get("priority_hold_status") or PRIORITY_HOLD_NONE)
+        if (
+            status in {PRIORITY_HOLD_HELD, PRIORITY_HOLD_RESTORE_FAILED}
+            and self._register_probe_outcome(event) == "pending"
+        ):
+            # The register probe has not delivered its verdict yet; let it
+            # decide instead of racing it with an unrelated run.
+            return False
+        if self._account_settings_locked(account_id):
+            logger.info(
+                "register priority hold lift skipped run=%s event_id=%s "
+                "account_id=%s reason=account_settings_locked",
+                run.get("id"),
+                event_id,
+                account_id,
+            )
+            return False
+        client = getattr(self.account_service, "client", None)
+        if client is None or not hasattr(client, "get_account"):
+            return False
+        account = await client.get_account(account_id)
+        if not bool(account.get("enabled")):
+            logger.info(
+                "register priority hold lift skipped run=%s event_id=%s "
+                "account_id=%s reason=account_disabled",
+                run.get("id"),
+                event_id,
+                account_id,
+            )
+            return False
+        held_priority = int(event["held_priority"])
+        current_priority = account.get("priority")
+        if current_priority is None or int(current_priority) != held_priority:
+            logger.info(
+                "register priority hold lift skipped run=%s event_id=%s "
+                "account_id=%s reason=priority_changed current=%s held=%s",
+                run.get("id"),
+                event_id,
+                account_id,
+                current_priority,
+                held_priority,
+            )
+            return False
+        logger.info(
+            "register priority hold lift after clean run run=%s trigger=%s "
+            "event_id=%s account_id=%s previous_status=%s",
+            run.get("id"),
+            run.get("trigger"),
+            event_id,
+            account_id,
+            status,
+        )
+        await self._restore_held_priority(event)
+        restored = self.repository.get_event(event_id) or {}
+        return (
+            str(restored.get("priority_hold_status") or "") == PRIORITY_HOLD_RESTORED
+        )
+
+    def _liftable_priority_hold(self, account_id: int) -> dict[str, Any] | None:
+        """Newest still-effective hold whose original priority is restorable."""
+
+        for event in self.repository.list_liftable_priority_holds_for_account(
+            account_id
+        ):
+            status = str(event.get("priority_hold_status") or PRIORITY_HOLD_NONE)
+            if status not in LIFTABLE_PRIORITY_HOLD_STATUSES:
+                continue
+            original = event.get("original_priority")
+            held = event.get("held_priority")
+            if original is None or held is None or int(original) == int(held):
+                # A re-import recorded while an older hold was active captures
+                # the held value as "original"; the older event is the one
+                # that can actually restore the account.
+                continue
+            return event
+        return None
+
+    def _account_settings_locked(self, account_id: int) -> bool:
+        probe_repository = getattr(self.probes, "repository", None)
+        locked_ids = getattr(probe_repository, "account_settings_locked_ids", None)
+        if locked_ids is None:
+            return False
+        return account_id in locked_ids({account_id})
 
     async def scan_priority_holds(self) -> None:
         for event in self.repository.list_unresolved_priority_holds():

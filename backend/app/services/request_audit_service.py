@@ -258,6 +258,11 @@ class RequestAuditService:
         cache_key = (
             self.settings.degradation_tps,
             self.settings.strong_degradation_tps,
+            tuple(
+                tuple(sorted((str(key), repr(value)) for key, value in item.items()))
+                for item in self.settings.model_tps_thresholds
+                if isinstance(item, dict)
+            ),
             self.settings.minimum_output_tokens,
             self.settings.buffer_first_token_share,
             self.settings.min_generation_ms,
@@ -1344,6 +1349,18 @@ class RequestAuditService:
         requests = len(recent)
         request_rate = requests / REQUEST_AUDIT_ACTIVITY_MINUTES
         max_tps = max(measured, default=0.0)
+        # Each row is compared with its own model's TPS band so healthy
+        # high-throughput models do not keep the scanner in busy mode.
+        risky_tps = max(
+            (
+                float(row["tps"])
+                for row in recent
+                if _finite_float(row.get("tps")) is not None
+                and float(row.get("tps") or 0)
+                >= self._row_thresholds(row).degradation_tps
+            ),
+            default=0.0,
+        )
         recent_evaluations = self._audit_risk_evaluations(recent)
         reasoning_zero_detected = any(
             self._evaluation_for(row, recent_evaluations).reasoning_detected
@@ -1363,7 +1380,7 @@ class RequestAuditService:
         elif (
             self.settings.request_audit_risk_enabled
             and (
-                max_tps >= self.settings.degradation_tps
+                risky_tps > 0
                 or reasoning_zero_detected
             )
         ):
@@ -1371,7 +1388,7 @@ class RequestAuditService:
             reasons.append(
                 "最近出现思考输出为 0 的风险请求"
                 if reasoning_zero_detected
-                else f"最近出现 {max_tps:.1f} Token/s 风险请求"
+                else f"最近出现 {risky_tps:.1f} Token/s 风险请求"
             )
         elif requests > 0:
             level = "normal"
@@ -2288,14 +2305,11 @@ class RequestAuditService:
             max(0, _int_or_zero(row.get("media_input_images")))
             for row in media_observe_rows
         )
-        ordinary_risk_tps = max(
-            (
-                float(row.get("tps") or 0)
-                for row, value in zip(rows, classifications, strict=True)
-                if value.rule_id != "media_input_observe"
-            ),
-            default=0.0,
-        )
+        ordinary_risk_rows = [
+            row
+            for row, value in zip(rows, classifications, strict=True)
+            if value.rule_id != "media_input_observe"
+        ]
         latest = max(
             rows,
             key=lambda row: (
@@ -2343,7 +2357,7 @@ class RequestAuditService:
             "mediaInputImages": media_input_images,
             "riskLevel": risk_level,
             "riskReasons": self._risk_reasons(
-                ordinary_risk_tps,
+                ordinary_risk_rows,
                 reasoning_zero_count=reasoning_zero_count,
                 reasoning_zero_streak=reasoning_zero_streak,
                 reasoning_zero_min_count=reasoning_zero_min_count,
@@ -2456,14 +2470,11 @@ class RequestAuditService:
                 max(0, _int_or_zero(row.get("media_input_images")))
                 for row in media_observe_rows
             )
-            ordinary_risk_tps = max(
-                (
-                    float(row.get("tps") or 0)
-                    for row, value in zip(rows, classifications, strict=True)
-                    if value.rule_id != "media_input_observe"
-                ),
-                default=0.0,
-            )
+            ordinary_risk_rows = [
+                row
+                for row, value in zip(rows, classifications, strict=True)
+                if value.rule_id != "media_input_observe"
+            ]
             latest = max(
                 rows,
                 key=lambda row: (
@@ -2518,7 +2529,7 @@ class RequestAuditService:
                     "mediaInputImages": media_input_images,
                     "riskLevel": risk_level,
                     "riskReasons": self._risk_reasons(
-                        ordinary_risk_tps,
+                        ordinary_risk_rows,
                         reasoning_zero_count=reasoning_zero_count,
                         reasoning_zero_streak=reasoning_zero_streak,
                         reasoning_zero_min_count=reasoning_zero_min_count,
@@ -2832,9 +2843,37 @@ class RequestAuditService:
             self.settings.strong_degradation_tps,
         )
 
+    def _row_thresholds(self, row: dict[str, Any]) -> Thresholds:
+        return self._rule_thresholds().for_model(
+            model_upstream_model=str(row.get("model_upstream_model") or ""),
+            model_public_id=str(row.get("model_public_id") or ""),
+        )
+
+    def _peak_tps_reason(self, rows: list[dict[str, Any]]) -> str | None:
+        """Describe the most severe TPS excess using each row's model band."""
+
+        best: tuple[int, float, float] | None = None
+        for row in rows:
+            tps = _finite_float(row.get("tps"))
+            if tps is None or tps <= 0:
+                continue
+            thresholds = self._row_thresholds(row)
+            if tps >= thresholds.strong_degradation_tps:
+                candidate = (2, tps, thresholds.strong_degradation_tps)
+            elif tps >= thresholds.degradation_tps:
+                candidate = (1, tps, thresholds.degradation_tps)
+            else:
+                continue
+            if best is None or candidate[:2] > best[:2]:
+                best = candidate
+        if best is None:
+            return None
+        _, tps, limit = best
+        return f"峰值 {tps:.1f} Token/s ≥ {limit:g} TPS"
+
     def _risk_reasons(
         self,
-        tps: float,
+        tps_rows: list[dict[str, Any]],
         *,
         reasoning_zero_count: int = 0,
         reasoning_zero_streak: int = 0,
@@ -2862,14 +2901,9 @@ class RequestAuditService:
                 f"Media Input 请求 {media_input_count} 次 / {media_input_images} 张，"
                 "高 TPS 暂按观察"
             )
-        if tps >= self.settings.strong_degradation_tps:
-            reasons.append(
-                f"峰值 {tps:.1f} Token/s ≥ {self.settings.strong_degradation_tps:g} TPS"
-            )
-        elif tps >= self.settings.degradation_tps:
-            reasons.append(
-                f"峰值 {tps:.1f} Token/s ≥ {self.settings.degradation_tps:g} TPS"
-            )
+        peak_reason = self._peak_tps_reason(tps_rows)
+        if peak_reason is not None:
+            reasons.append(peak_reason)
         return reasons
 
     def _trend_payload(

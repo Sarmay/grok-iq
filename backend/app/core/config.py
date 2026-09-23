@@ -4,9 +4,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.model_thresholds import (
+    default_model_tps_thresholds,
+    normalize_model_tps_thresholds,
+)
 from app.reasoning_policy import default_reasoning_model_policies
 
 DEFAULT_DATABASE_PATH = Path(__file__).resolve().parents[2] / "data" / "grokiq.db"
@@ -226,6 +230,13 @@ class Settings(BaseSettings):
     analysis_window_hours: int = Field(default=168, ge=1, le=24 * 365)
     degradation_tps: float = Field(default=150, gt=0)
     strong_degradation_tps: float = Field(default=500, gt=0)
+    # Per-upstream-model replacements for the two TPS thresholds above, as
+    # [{"model", "degradationTps", "strongDegradationTps"}]. ``Build/grok-4.7``
+    # also matches probe profiles that store the bare ``grok-4.7`` id. Models
+    # without an entry keep the global thresholds.
+    model_tps_thresholds: list[dict[str, Any]] = Field(
+        default_factory=default_model_tps_thresholds
+    )
     probe_tps_override_enabled: bool = True
     probe_tps_override_mode: ProbeTpsOverrideMode = "missing_reasoning"
     probe_tps_override_min_first_token_ms: int = Field(
@@ -342,6 +353,7 @@ class Settings(BaseSettings):
         "analysis_window_hours",
         "degradation_tps",
         "strong_degradation_tps",
+        "model_tps_thresholds",
         "probe_tps_override_enabled",
         "probe_tps_override_mode",
         "probe_tps_override_min_first_token_ms",
@@ -385,6 +397,13 @@ class Settings(BaseSettings):
             "linuxdo_oauth_client_secret",
         }
     )
+
+    @field_validator("model_tps_thresholds", mode="after")
+    @classmethod
+    def _validate_model_tps_thresholds(
+        cls, value: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        return [item.public_dict() for item in normalize_model_tps_thresholds(value)]
 
     @property
     def normalized_gateway_base_url(self) -> str:

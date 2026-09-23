@@ -525,6 +525,9 @@ class RuntimeSettingsInput(BaseModel):
     analysis_window_hours: int | None = Field(default=None, alias="analysisWindowHours", ge=1, le=24 * 365)
     degradation_tps: float | None = Field(default=None, alias="degradationTps", gt=0)
     strong_degradation_tps: float | None = Field(default=None, alias="strongDegradationTps", gt=0)
+    model_tps_thresholds: list[dict[str, Any]] | None = Field(
+        default=None, alias="modelTpsThresholds", max_length=50
+    )
     probe_tps_override_enabled: bool | None = Field(
         default=None, alias="probeTpsOverrideEnabled"
     )

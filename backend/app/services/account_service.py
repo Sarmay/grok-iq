@@ -1323,6 +1323,8 @@ class AccountService:
         Returns the refreshed assessment when the account was restored, or
         ``None`` when nothing changed.  Priority is left untouched: isolation
         never altered it, so the account resumes at its pre-isolation value.
+        A register priority hold still in effect is lifted separately, after
+        this release, by ``ProbeManager.maybe_restore_register_priority_hold``.
         """
 
         normalized_account_id = int(account_id)

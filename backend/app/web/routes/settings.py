@@ -58,6 +58,7 @@ def build_settings_router(
             "analysis_window_hours",
             "degradation_tps",
             "strong_degradation_tps",
+            "model_tps_thresholds",
             "probe_tps_override_enabled",
             "probe_tps_override_mode",
             "probe_tps_override_min_first_token_ms",

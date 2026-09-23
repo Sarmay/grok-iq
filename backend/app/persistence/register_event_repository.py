@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.clock import utc_now
@@ -19,6 +19,13 @@ PRIORITY_HOLD_KEPT = "kept"
 UNRESOLVED_PRIORITY_HOLD_STATUSES = (
     PRIORITY_HOLD_HELD,
     PRIORITY_HOLD_RESTORE_FAILED,
+)
+# Holds a later clean probe run may still lift.  ``kept`` only records the
+# register probe's own verdict; it is not final once newer evidence is clean.
+LIFTABLE_PRIORITY_HOLD_STATUSES = (
+    PRIORITY_HOLD_HELD,
+    PRIORITY_HOLD_RESTORE_FAILED,
+    PRIORITY_HOLD_KEPT,
 )
 
 
@@ -362,6 +369,40 @@ class RegisterEventRepository:
                     )
                 )
                 .order_by(RegisterWebhookEvent.priority_held_at.asc())
+            ).all()
+            return [model_dict(event) for event in events]
+
+    def list_liftable_priority_holds_for_account(
+        self, account_id: int
+    ) -> list[dict[str, Any]]:
+        """Return the account's still-effective priority holds, newest first.
+
+        An event belongs to the account it restores, i.e. ``resolved_account_id``
+        when bound and otherwise the ``grok2api_account_id`` it arrived with.
+        """
+
+        normalized = int(account_id or 0)
+        if normalized <= 0:
+            return []
+        with self.database.session() as session:
+            events = session.scalars(
+                select(RegisterWebhookEvent)
+                .where(
+                    RegisterWebhookEvent.priority_hold_status.in_(
+                        LIFTABLE_PRIORITY_HOLD_STATUSES
+                    ),
+                    or_(
+                        RegisterWebhookEvent.resolved_account_id == normalized,
+                        and_(
+                            RegisterWebhookEvent.resolved_account_id.is_(None),
+                            RegisterWebhookEvent.grok2api_account_id == normalized,
+                        ),
+                    ),
+                )
+                .order_by(
+                    RegisterWebhookEvent.created_at.desc(),
+                    RegisterWebhookEvent.event_id.desc(),
+                )
             ).all()
             return [model_dict(event) for event in events]
 

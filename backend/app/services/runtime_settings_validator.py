@@ -8,6 +8,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from app.core.config import Settings
 from app.integrations.sso import normalize_proxy
+from app.model_thresholds import normalize_model_tps_thresholds
 from app.reasoning_policy import normalize_reasoning_model_policies
 
 
@@ -15,6 +16,7 @@ class RuntimeSettingsValidator:
     """Applies cross-field validation and normalization to runtime settings."""
 
     def validate(self, values: dict[str, object], fixed_strategy: dict[str, object]) -> Settings:
+        values = self._normalize_model_tps_thresholds(values)
         candidate = Settings.model_validate(values | fixed_strategy)
         self._validate_risk(candidate)
         self._normalize_risk_rules(candidate)
@@ -90,6 +92,23 @@ class RuntimeSettingsValidator:
                     item[str(key)] = value
             normalized.append(item)
         candidate.risk_rule_overrides = normalized
+
+    @staticmethod
+    def _normalize_model_tps_thresholds(
+        values: dict[str, object],
+    ) -> dict[str, object]:
+        # Validate before pydantic so operators see the plain message instead
+        # of a wrapped ValidationError.
+        raw = values.get("model_tps_thresholds")
+        if raw is None:
+            return values
+        if not isinstance(raw, list):
+            raise ValueError("模型 TPS 阈值必须是列表")
+        return values | {
+            "model_tps_thresholds": [
+                item.public_dict() for item in normalize_model_tps_thresholds(raw)
+            ]
+        }
 
     @staticmethod
     def _normalize_reasoning_model_policies(candidate: Settings) -> None:

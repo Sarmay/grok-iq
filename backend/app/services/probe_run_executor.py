@@ -634,15 +634,18 @@ class ProbeRunExecutor:
                         run["id"],
                         account_id,
                     )
-        if str(run.get("trigger") or "") == "register":
-            restore = getattr(manager, "maybe_restore_register_priority_hold", None)
-            if restore is not None:
-                try:
-                    await restore(run)
-                except Exception:
-                    logger.exception(
-                        "register priority hold restore failed worker=%s run=%s account=%s",
-                        runtime.worker_id,
-                        run_id,
-                        account_id,
-                    )
+        # Must stay after snapshot restoration (``execute``'s finally) and the
+        # quarantine re-check release above: lifting a register hold earlier
+        # would be overwritten by the snapshot's held priority, and a disabled
+        # account must not get its priority back before it is released.
+        restore = getattr(manager, "maybe_restore_register_priority_hold", None)
+        if restore is not None:
+            try:
+                await restore(run, finished)
+            except Exception:
+                logger.exception(
+                    "register priority hold restore failed worker=%s run=%s account=%s",
+                    runtime.worker_id,
+                    run_id,
+                    account_id,
+                )

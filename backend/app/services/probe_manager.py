@@ -331,11 +331,28 @@ class ProbeManager:
         self._wake.set()
         return new_id
 
-    async def maybe_restore_register_priority_hold(self, run: dict[str, Any]) -> None:
+    async def maybe_restore_register_priority_hold(
+        self,
+        run: dict[str, Any],
+        finished: dict[str, Any] | None = None,
+    ) -> None:
+        """Resolve a register priority hold after a run and its cleanup finish.
+
+        Register runs settle their own event.  Any other finished run may lift
+        a hold that is still in effect for the account once it passed cleanly;
+        this runs after snapshot restoration and the quarantine re-check
+        release, so it sees the account's final enabled state and priority.
+        """
+
         service = self.register_integration
         if service is None:
             return
-        await service.maybe_restore_priority_hold(run)
+        if str(run.get("source_event_id") or "").strip():
+            await service.maybe_restore_priority_hold(run)
+            return
+        await service.maybe_lift_priority_hold_after_clean_run(
+            finished if finished is not None else run
+        )
 
     async def maybe_switch_register_probe_egress(
         self,

@@ -933,3 +933,96 @@ def test_unsaved_reasoning_policies_do_not_freeze_the_default_list(tmp_path: Pat
         for item in settings.reasoning_model_policies
     )
     assert "reasoning_model_policies" not in service.repository.load()
+
+
+def test_model_tps_thresholds_default_to_grok_4_7_band(tmp_path: Path):
+    _database, settings, service = build_service(tmp_path)
+
+    service.load()
+
+    expected = [
+        {"model": "Build/grok-4.7", "degradationTps": 300, "strongDegradationTps": 600}
+    ]
+    assert settings.model_tps_thresholds == expected
+    assert service.public_view()["modelTpsThresholds"] == expected
+    assert "model_tps_thresholds" not in service.repository.load()
+
+
+def test_model_tps_thresholds_round_trip_through_settings_api(tmp_path: Path):
+    database, settings, service = build_service(tmp_path)
+    payload = RuntimeSettingsInput.model_validate(
+        {
+            "modelTpsThresholds": [
+                {"model": "grok-4.7", "degradationTps": 320, "strongDegradationTps": 650},
+                {"model": "Build/grok-4.8", "degradationTps": 400, "strongDegradationTps": 800},
+            ]
+        }
+    )
+
+    changed = service.update(payload.runtime_changes())
+
+    assert changed == ["model_tps_thresholds"]
+    expected = [
+        {"model": "grok-4.7", "degradationTps": 320, "strongDegradationTps": 650},
+        {"model": "Build/grok-4.8", "degradationTps": 400, "strongDegradationTps": 800},
+    ]
+    assert service.public_view()["modelTpsThresholds"] == expected
+
+    reloaded_settings = Settings(database_path=tmp_path / "grokiq.db")
+    reloaded = RuntimeSettingsService(
+        reloaded_settings,
+        SettingsRepository(database, reloaded_settings),
+    )
+    reloaded.load()
+    assert reloaded_settings.model_tps_thresholds == expected
+
+    # Saving unrelated settings leaves the per-model band intact.
+    reloaded.update({"degradation_tps": 140})
+    assert reloaded_settings.model_tps_thresholds == expected
+
+    reloaded.update({"model_tps_thresholds": []})
+    assert reloaded_settings.model_tps_thresholds == []
+
+
+@pytest.mark.parametrize(
+    ("entries", "message"),
+    [
+        (
+            [{"model": "Build/grok-4.7", "degradationTps": 600, "strongDegradationTps": 600}],
+            "必须小于强降智信号",
+        ),
+        (
+            [{"model": "Build/grok-4.7", "degradationTps": 0, "strongDegradationTps": 600}],
+            "必须大于 0",
+        ),
+        (
+            [{"model": " ", "degradationTps": 300, "strongDegradationTps": 600}],
+            "缺少上游模型",
+        ),
+        (
+            [
+                {"model": "Build/grok-4.7", "degradationTps": 300, "strongDegradationTps": 600},
+                {"model": "grok-4.7", "degradationTps": 310, "strongDegradationTps": 610},
+            ],
+            "重复",
+        ),
+    ],
+)
+def test_model_tps_thresholds_reject_invalid_entries(
+    tmp_path: Path, entries: list[dict[str, object]], message: str
+):
+    _database, settings, service = build_service(tmp_path)
+
+    with pytest.raises(ValueError, match=message):
+        service.update({"model_tps_thresholds": entries})
+    assert settings.model_tps_thresholds[0]["degradationTps"] == 300
+
+
+def test_model_tps_thresholds_are_validated_on_settings_construction():
+    with pytest.raises(ValueError, match="必须小于强降智信号"):
+        Settings(
+            _env_file=None,
+            model_tps_thresholds=[
+                {"model": "Build/grok-4.7", "degradationTps": 700, "strongDegradationTps": 600}
+            ],
+        )

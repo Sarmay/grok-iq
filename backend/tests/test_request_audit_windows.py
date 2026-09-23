@@ -196,3 +196,55 @@ def test_required_media_input_reasoning_zero_does_not_auto_disable():
     assert any("不作为隔离或停用依据" in reason for reason in latest.classification.reasons)
     assert candidates == []
 
+
+
+def _tps_row(tps: float, model: str) -> dict[str, object]:
+    return {
+        "upstream_id": f"{model}-{tps}",
+        "account_id": 7,
+        "status_code": 200,
+        "output_tokens": 2000,
+        "reasoning_tokens": 800,
+        "reasoning_tokens_reported": True,
+        "first_token_ms": 1500,
+        "duration_ms": 12_000,
+        "tps": tps,
+        "model_upstream_model": model,
+        "operation": "chat",
+        "created_at": utc_now(),
+    }
+
+
+def test_peak_tps_reason_uses_each_rows_model_thresholds():
+    service = RequestAuditService(
+        settings=Settings(
+            _env_file=None, degradation_tps=150, strong_degradation_tps=240
+        ),
+        client=MagicMock(),
+        repository=MagicMock(),
+    )
+
+    assert service._risk_reasons([_tps_row(234, "Build/grok-4.7")]) == []
+    assert service._risk_reasons(
+        [_tps_row(234, "Build/grok-4.7"), _tps_row(180, "Build/grok-4.5")]
+    ) == ["峰值 180.0 Token/s ≥ 150 TPS"]
+    assert service._risk_reasons([_tps_row(700, "Build/grok-4.7")]) == [
+        "峰值 700.0 Token/s ≥ 600 TPS"
+    ]
+
+
+def test_healthy_grok_4_7_traffic_does_not_force_busy_scan():
+    repository = MagicMock()
+    repository.records_for_range.return_value = [_tps_row(234, "Build/grok-4.7")]
+    service = RequestAuditService(
+        settings=Settings(
+            _env_file=None, degradation_tps=150, strong_degradation_tps=240
+        ),
+        client=MagicMock(),
+        repository=repository,
+    )
+
+    assert service._activity_payload()["level"] == "normal"
+
+    repository.records_for_range.return_value = [_tps_row(180, "Build/grok-4.5")]
+    assert service._activity_payload()["level"] == "busy"

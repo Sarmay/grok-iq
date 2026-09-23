@@ -2329,3 +2329,167 @@ async def test_bind_window_fallback_explains_disabled_quality_guard(tmp_path: Pa
         assert client.quality_probe_calls == []
     finally:
         await manager.stop()
+
+
+class RecheckReleaseGrokClient(DisabledFakeGrokClient):
+    """Disabled, register-held account that records every upstream write in order."""
+
+    def __init__(self, *, held_priority: int):
+        super().__init__()
+        self.account_priority = held_priority
+        self.account_egress_node_id = 7
+        self.account_egress_mode = "manual"
+        self.writes: list[tuple[Any, ...]] = []
+
+    async def set_account_routing_settings(
+        self,
+        account_id: int,
+        *,
+        enabled: bool,
+        priority: int,
+        max_concurrent: int,
+    ) -> None:
+        await super().set_account_routing_settings(
+            account_id,
+            enabled=enabled,
+            priority=priority,
+            max_concurrent=max_concurrent,
+        )
+        self.writes.append(("routing", enabled, priority))
+
+    async def set_account_enabled(self, _: int, enabled: bool) -> None:
+        self.account_enabled = bool(enabled)
+        self.writes.append(("enabled", bool(enabled)))
+
+    async def set_account_priority(self, account_id: int, priority: int) -> dict[str, Any]:
+        self.account_priority = int(priority)
+        self.writes.append(("priority", int(priority)))
+        return {"id": int(account_id), "priority": int(priority)}
+
+
+@pytest.mark.asyncio
+async def test_quarantine_recheck_release_lifts_register_priority_hold_after_snapshot(
+    tmp_path: Path,
+):
+    from app.persistence.register_event_repository import RegisterEventRepository
+    from app.services.register_integration import RegisterIntegrationService
+
+    held_priority = -1_000_000
+    database = Database(tmp_path / "grokiq.db")
+    database.initialize()
+    repository = ProbeRepository(database)
+    repository.seed_defaults()
+    accounts = AccountRepository(database)
+    register_events = RegisterEventRepository(database)
+    register_events.receive(
+        {
+            "event_id": "reg-held",
+            "email": "probe@example.test",
+            "grok2api_account_id": 10,
+        }
+    )
+    register_events.complete("reg-held", 10, [])
+    register_events.mark_priority_hold(
+        "reg-held", original_priority=7, held_priority=held_priority
+    )
+    register_events.mark_priority_kept(
+        "reg-held", "注册探针样本不足，保持降低后的 grok2api 优先级"
+    )
+    accounts.set_manual_status(
+        account_id=10,
+        status="quarantined",
+        note="grok2api 降智停用",
+        quarantine_until=None,
+        previous_upstream_enabled=False,
+        disabled_by_monitor=False,
+        recovery_guarded=False,
+        source="quality_retry",
+    )
+    client = RecheckReleaseGrokClient(held_priority=held_priority)
+    settings = Settings(
+        database_path=tmp_path / "grokiq.db",
+        scheduler_enabled=False,
+        probe_worker_concurrency=1,
+        probe_step_delay_seconds=0,
+        probe_current_egress_interval_seconds=0,
+        scheduled_probe_register_cooldown_minutes=0,
+        # Distinct from the hold so the trace shows which write set what.
+        probe_diagnostic_priority=-900,
+        quarantine_recheck_restore_enabled=True,
+        quarantine_recheck_pass_count=1,
+        quarantine_recheck_restore_sources=["quality_retry"],
+    )
+    account_service = AccountService(
+        settings=settings,
+        client=client,  # type: ignore[arg-type]
+        accounts=accounts,
+        probes=repository,
+        register_events=register_events,
+    )
+    manager = ProbeManager(
+        settings=settings,
+        repository=repository,
+        accounts=accounts,
+        client=client,  # type: ignore[arg-type]
+        thresholds=Thresholds(),
+        account_service=account_service,
+    )
+    manager.register_integration = RegisterIntegrationService(
+        settings=settings,
+        repository=register_events,
+        accounts=accounts,
+        account_service=account_service,
+        probes=manager,
+    )
+    await manager.start()
+    try:
+        plan_id = repository.create_plan(
+            {
+                "name": "quarantine-recheck",
+                "description": "",
+                "profile_id": "quality-marker",
+                "profile_ids": ["quality-marker"],
+                "account_scope": "quarantined",
+                "account_ids": [],
+                "proxy_targets": [{"kind": "current", "id": None}],
+                "execution_mode": "chat",
+                "rounds": 1,
+                "cron_expression": "15 */6 * * *",
+                "timezone": "UTC",
+                "enabled": True,
+                "overlap_policy": "skip",
+                "priority": 200,
+            }
+        )
+        result = await manager.enqueue_plan(repository.get_plan(plan_id) or {})
+        assert result["diagnosticAccountIds"] == [10]
+        detail = await wait_for_terminal_run(repository, result["runIds"][0])
+        assert detail["run"]["status"] == "completed"
+        # Post-processing (re-check release, hold lift) runs after finish_run.
+        event: dict[str, Any] = {}
+        for _ in range(150):
+            event = register_events.get_event("reg-held") or {}
+            if event.get("priority_hold_status") == "restored":
+                break
+            await asyncio.sleep(0.02)
+    finally:
+        await manager.stop()
+
+    assert event["priority_hold_status"] == "restored"
+    assert event["priority_restored_at"] is not None
+    assert event["priority_hold_error"] == ""
+    assert client.account_enabled is True
+    assert client.account_priority == 7
+    assessment = accounts.get_assessment(10) or {}
+    assert assessment["monitor_status"] != "quarantined"
+    # Diagnostic activation -> snapshot restore (disabled, held priority) ->
+    # run cleanup keeps the isolated account disabled -> re-check release
+    # enables it -> hold lift restores the original priority, last.
+    assert client.writes == [
+        ("routing", True, -900),
+        ("routing", False, held_priority),
+        ("enabled", False),
+        ("enabled", True),
+        ("priority", 7),
+    ]
+    database.dispose()

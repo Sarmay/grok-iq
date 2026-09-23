@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from curl_cffi.const import CurlHttpVersion, CurlOpt
 
+from app.core.config import Settings
 from app.integrations.grok2api.http_session import abort_curl_stream, streaming_curl_options
 from app.services.chat_service import ChatService
 
@@ -114,6 +115,152 @@ def test_completion_url_defaults_to_responses() -> None:
         ChatService._completion_url("https://api.test/v1/chat/completions")
         == "https://api.test/v1/chat/completions"
     )
+
+
+def test_bootstrap_points_default_gateway_at_live_grok2api_url() -> None:
+    settings = Settings(
+        _env_file=None,
+        grok2api_base_url="http://107.174.124.163:8000",
+    )
+    providers = _MemoryProviders(
+        [
+            {
+                "id": "gateway",
+                "name": "默认网关",
+                "base_url": "http://127.0.0.1:8000",
+                "is_default": True,
+                "enabled": True,
+                "models": [],
+                "api_key_configured": False,
+            }
+        ]
+    )
+
+    ChatService(settings=settings, providers=providers).bootstrap()
+
+    assert providers.rows[0]["base_url"] == "http://107.174.124.163:8000"
+
+
+def test_bootstrap_repairs_placeholder_default_provider() -> None:
+    settings = Settings(
+        _env_file=None,
+        grok2api_base_url="http://107.174.124.163:8000",
+    )
+    providers = _MemoryProviders(
+        [
+            {
+                "id": "gateway",
+                "name": "生产网关",
+                "base_url": "http://host.docker.internal:8000",
+                "is_default": True,
+                "enabled": True,
+                "models": [],
+                "api_key_configured": False,
+            }
+        ]
+    )
+
+    ChatService(settings=settings, providers=providers).bootstrap()
+
+    assert providers.rows[0]["base_url"] == "http://107.174.124.163:8000"
+
+
+def test_bootstrap_leaves_custom_provider_url() -> None:
+    settings = Settings(
+        _env_file=None,
+        grok2api_base_url="http://107.174.124.163:8000",
+    )
+    providers = _MemoryProviders(
+        [
+            {
+                "id": "custom",
+                "name": "其他网关",
+                "base_url": "https://api.example.test/v1",
+                "is_default": True,
+                "enabled": True,
+                "models": [],
+                "api_key_configured": False,
+            }
+        ]
+    )
+
+    ChatService(settings=settings, providers=providers).bootstrap()
+
+    assert providers.rows[0]["base_url"] == "https://api.example.test/v1"
+
+
+@pytest.mark.asyncio
+async def test_default_gateway_lists_models_from_live_grok2api_url() -> None:
+    settings = Settings(
+        _env_file=None,
+        grok2api_base_url="http://107.174.124.163:8000",
+    )
+    providers = MagicMock()
+    providers.get_default.return_value = {
+        "id": "gateway",
+        "name": "默认网关",
+        "base_url": "http://127.0.0.1:8000",
+        "api_key": "",
+        "models": [],
+        "enabled": True,
+    }
+    response = MagicMock(status_code=200, text="")
+    response.json.return_value = {"data": [{"id": "grok-4.5"}]}
+    session = MagicMock()
+    session.get = AsyncMock(return_value=response)
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("app.services.chat_service.CurlAsyncSession", return_value=session):
+        models = await ChatService(settings=settings, providers=providers).list_models("")
+
+    assert models == [
+        {"id": "grok-4.5", "name": "grok-4.5", "owned_by": "默认网关"}
+    ]
+    assert session.get.await_args.args[0] == "http://107.174.124.163:8000/v1/models"
+
+
+@pytest.mark.asyncio
+async def test_custom_provider_lists_models_from_its_own_url() -> None:
+    settings = Settings(
+        _env_file=None,
+        grok2api_base_url="http://107.174.124.163:8000",
+    )
+    providers = MagicMock()
+    providers.get.return_value = {
+        "id": "custom",
+        "name": "其他网关",
+        "base_url": "https://api.example.test/v1",
+        "api_key": "",
+        "models": [],
+        "enabled": True,
+    }
+    response = MagicMock(status_code=200, text="")
+    response.json.return_value = {"data": [{"id": "other"}]}
+    session = MagicMock()
+    session.get = AsyncMock(return_value=response)
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("app.services.chat_service.CurlAsyncSession", return_value=session):
+        await ChatService(settings=settings, providers=providers).list_models("custom")
+
+    assert session.get.await_args.args[0] == "https://api.example.test/v1/models"
+
+
+class _MemoryProviders:
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self.rows = rows
+
+    def list(self) -> list[dict[str, object]]:
+        return list(self.rows)
+
+    def update(self, provider_id: str, values: dict[str, object]) -> dict[str, object] | None:
+        for row in self.rows:
+            if row["id"] == provider_id:
+                row.update(values)
+                return row
+        return None
 
 
 def test_root_provider_uses_responses_only() -> None:

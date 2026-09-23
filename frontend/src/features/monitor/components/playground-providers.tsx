@@ -465,6 +465,8 @@ function ProviderEditorDialog({
   pending: boolean
   onSave: () => void
 }) {
+  const followsSystemGateway =
+    editingProvider?.name === '默认网关' && draft.name.trim() === '默认网关'
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -493,6 +495,7 @@ function ProviderEditorDialog({
           <PlaygroundField label='Base URL'>
             <Input
               value={draft.baseUrl}
+              readOnly={followsSystemGateway}
               onChange={(event) =>
                 setDraft((current) => ({
                   ...current,
@@ -501,6 +504,12 @@ function ProviderEditorDialog({
               }
               placeholder='https://HOST/v1'
             />
+            {followsSystemGateway && (
+              <p className='text-xs text-muted-foreground'>
+                默认网关跟随系统设置里的 grok2api
+                服务地址。要连接其他服务，请新建提供商并改用其他名称。
+              </p>
+            )}
           </PlaygroundField>
           <PlaygroundField label='API Key' className='sm:col-span-2'>
             <PasswordInput

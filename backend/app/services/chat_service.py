@@ -24,6 +24,18 @@ class ChatUpstreamError(IntegrationError):
     """An upstream provider response whose HTTP status should reach the UI."""
 
 
+# Seeded once, then kept aligned with the live grok2api address. A provider
+# under any other name keeps the Base URL saved in the playground.
+DEFAULT_GATEWAY_PROVIDER_NAME = "默认网关"
+_BOOTSTRAP_GATEWAY_URLS = frozenset(
+    {
+        "http://127.0.0.1:8000",
+        "http://localhost:8000",
+        "http://host.docker.internal:8000",
+    }
+)
+
+
 class ChatService:
     """Manages OpenAI-compatible providers and proxies playground requests."""
 
@@ -37,36 +49,48 @@ class ChatService:
         self.providers = providers
 
     def bootstrap(self) -> None:
-        if self.providers.list():
+        gateway = self.settings.normalized_gateway_base_url
+        providers = self.providers.list()
+        if not providers:
+            self.providers.create(
+                name=DEFAULT_GATEWAY_PROVIDER_NAME,
+                base_url=gateway,
+                api_key="",
+                models=[],
+                enabled=True,
+                is_default=True,
+            )
             return
-        self.providers.create(
-            name="默认网关",
-            base_url=self.settings.normalized_gateway_base_url,
-            api_key="",
-            models=[],
-            enabled=True,
-            is_default=True,
-        )
+        for provider in providers:
+            stored = str(provider.get("base_url") or "").rstrip("/")
+            if stored == gateway:
+                continue
+            if self._follows_gateway(provider) or self._has_stale_bootstrap_url(provider):
+                self.providers.update(provider["id"], {"base_url": gateway})
 
     def list_providers(self) -> list[dict[str, Any]]:
-        return [self._public(item) for item in self.providers.list()]
+        return [self._public(self._with_live_gateway(item)) for item in self.providers.list()]
 
     def create_provider(self, values: dict[str, Any]) -> dict[str, Any]:
+        name = str(values["name"]).strip()
         provider = self.providers.create(
-            name=str(values["name"]).strip(),
-            base_url=self._normalize_base_url(str(values["base_url"])),
+            name=name,
+            base_url=self._provider_base_url(name, str(values["base_url"])),
             api_key=str(values.get("api_key") or "").strip(),
             models=self._normalize_models(values.get("models", [])),
             enabled=bool(values.get("enabled", True)),
             is_default=bool(values.get("is_default", False)),
         )
-        return self._public(provider)
+        return self._public(self._with_live_gateway(provider))
 
     def update_provider(
         self,
         provider_id: str,
         values: dict[str, Any],
     ) -> dict[str, Any]:
+        current = self.providers.get(provider_id)
+        if current is None:
+            raise ValueError("模型提供商不存在")
         changes: dict[str, Any] = {}
         if "name" in values:
             changes["name"] = str(values["name"]).strip()
@@ -82,10 +106,13 @@ class ChatService:
             changes["api_key"] = api_key
         elif values.get("clear_api_key"):
             changes["api_key"] = ""
+        next_name = str(changes.get("name", current["name"]))
+        if next_name == DEFAULT_GATEWAY_PROVIDER_NAME:
+            changes["base_url"] = self.settings.normalized_gateway_base_url
         provider = self.providers.update(provider_id, changes)
         if provider is None:
             raise ValueError("模型提供商不存在")
-        return self._public(provider)
+        return self._public(self._with_live_gateway(provider))
 
     def delete_provider(self, provider_id: str) -> None:
         if not self.providers.delete(provider_id):
@@ -113,7 +140,7 @@ class ChatService:
         updated = self.providers.set_models(provider["id"], models)
         if updated is None:
             raise ValueError("模型提供商不存在")
-        return self._public(updated)
+        return self._public(self._with_live_gateway(updated))
 
     async def open_completion(
         self,
@@ -169,23 +196,24 @@ class ChatService:
 
     async def _fetch_models(self, provider: dict[str, Any]) -> list[str]:
         headers = self._upstream_headers(provider, accept="application/json")
+        url = self._resource_url(
+            self._base_without_endpoint(provider["base_url"]),
+            "models",
+        )
         try:
             async with CurlAsyncSession(
                 impersonate=self.settings.grok2api_http_impersonate
             ) as session:
                 response = await session.get(
-                    self._resource_url(
-                        self._base_without_endpoint(provider["base_url"]),
-                        "models",
-                    ),
+                    url,
                     headers=headers,
                     timeout=60,
                 )
         except Exception as exc:
-            raise IntegrationError(f"模型列表请求失败: {exc}") from exc
+            raise IntegrationError(f"模型列表请求失败: {url}: {exc}") from exc
         if response.status_code >= 300:
             raise ChatUpstreamError(
-                f"模型列表请求失败: HTTP {response.status_code} {response.text[:1000]}",
+                f"模型列表请求失败: {url} HTTP {response.status_code} {response.text[:1000]}",
                 status_code=response.status_code,
                 response_body=response.text[:4000],
             )
@@ -216,7 +244,34 @@ class ChatService:
             raise ValueError("请先配置模型提供商")
         if not provider["enabled"]:
             raise ValueError("当前模型提供商已停用")
-        return provider
+        return self._with_live_gateway(provider)
+
+    def _provider_base_url(self, name: str, value: str) -> str:
+        if name == DEFAULT_GATEWAY_PROVIDER_NAME:
+            return self.settings.normalized_gateway_base_url
+        return self._normalize_base_url(value)
+
+    def _with_live_gateway(self, provider: dict[str, Any]) -> dict[str, Any]:
+        if not self._follows_gateway(provider):
+            return provider
+        gateway = self.settings.normalized_gateway_base_url
+        if str(provider.get("base_url") or "").rstrip("/") == gateway:
+            return provider
+        return {**provider, "base_url": gateway}
+
+    @staticmethod
+    def _follows_gateway(provider: dict[str, Any]) -> bool:
+        return str(provider.get("name") or "") == DEFAULT_GATEWAY_PROVIDER_NAME
+
+    def _has_stale_bootstrap_url(self, provider: dict[str, Any]) -> bool:
+        """Repair a default provider still pointing at the old built-in address."""
+
+        stored = str(provider.get("base_url") or "").rstrip("/")
+        return (
+            bool(provider.get("is_default"))
+            and stored in _BOOTSTRAP_GATEWAY_URLS
+            and stored != self.settings.normalized_gateway_base_url
+        )
 
     @staticmethod
     def _upstream_headers(

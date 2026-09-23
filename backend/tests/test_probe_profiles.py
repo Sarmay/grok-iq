@@ -219,6 +219,33 @@ def test_default_profile_markers_migrate_once_and_keep_custom_values(tmp_path: P
     assert repository.get_profile("html-preview")["expected_text"] == "<html"
 
 
+def test_default_profiles_move_off_retired_model_once_and_keep_custom_model(
+    tmp_path: Path,
+):
+    database = Database(tmp_path / "grokiq.db")
+    database.initialize()
+    with database.transaction() as session:
+        for values in DEFAULT_PROFILES:
+            override: dict[str, Any] = {"model": "grok-4.5"}
+            if values["id"] == "html-preview":
+                override = {"model": "grok-composer-2.5-fast"}
+            session.add(ProbeProfile(**(values | override)))
+
+    repository = ProbeRepository(database)
+    repository.seed_defaults()
+
+    profiles = {profile["id"]: profile for profile in repository.list_profiles()}
+    assert profiles["quality-marker"]["model"] == "grok-4.7"
+    assert profiles["reasoning-check"]["model"] == "grok-4.7"
+    assert profiles["html-preview"]["model"] == "grok-composer-2.5-fast"
+    assert all(profile["model"] != "grok-4.5" for profile in profiles.values())
+
+    repository.update_profile("quality-marker", {"model": "grok-4.5"})
+    repository.seed_defaults()
+
+    assert repository.get_profile("quality-marker")["model"] == "grok-4.5"
+
+
 def test_profile_input_follows_upstream_output_limit_by_default():
     profile = ProfileInput(name="probe", model="model", prompt="prompt")
 

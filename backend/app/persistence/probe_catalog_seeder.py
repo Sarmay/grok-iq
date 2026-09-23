@@ -23,8 +23,12 @@ DEFAULT_QUALITY_MARKER_MIGRATION_KEY = "default_probe_profiles_quality_marker_cn
 DEFAULT_HTML_PREVIEW_MIGRATION_KEY = "default_probe_profiles_html_preview_pelican_v1"
 DEFAULT_HTML_PREVIEW_MARKER_MIGRATION_KEY = "default_probe_profiles_html_preview_svg_marker_v1"
 DEFAULT_REASONING_CHECK_MIGRATION_KEY = "default_probe_profiles_reasoning_check_hidden_answer_v1"
+DEFAULT_PROFILES_MODEL_MIGRATION_KEY = "default_probe_profiles_model_grok_4_7_v1"
 PROBE_DURATION_ESTIMATE_BACKFILL_KEY = "probe_duration_estimates_backfill_v1"
 SAFE_CURRENT_EGRESS_MIGRATION_KEY = "probe_targets_current_egress_v1"
+# grok-4.5 is no longer served upstream; built-in profiles still pointing at
+# it cannot create a probe route and fail before the first request.
+LEGACY_DEFAULT_PROFILE_MODEL = "grok-4.5"
 LEGACY_QUALITY_MARKER_FIELDS = {
     "prompt": "先用三点总结为什么天空呈蓝色，最后一行只输出 QUALITY_OK。",
     "expected_text": "QUALITY_OK",
@@ -97,6 +101,7 @@ class ProbeCatalogSeeder:
             profile_id="reasoning-check",
             legacy_fields=LEGACY_REASONING_CHECK_FIELDS,
         )
+        self._apply_default_model_migration(session)
         self._backfill_duration_estimates(session)
         self._migrate_current_egress_targets(session)
 
@@ -125,6 +130,21 @@ class ProbeCatalogSeeder:
                 profile.expected_output = str(values.get("expected_output") or "")
                 profile.updated_at = utc_now()
         self._mark_migration(session, DEFAULT_PROFILES_EXPECTED_OUTPUT_MIGRATION_KEY)
+
+    def _apply_default_model_migration(self, session: Session) -> None:
+        """Move every built-in profile still on the retired model to the current one.
+
+        Profiles the operator already pointed elsewhere are left untouched.
+        """
+
+        if self._migration_applied(session, DEFAULT_PROFILES_MODEL_MIGRATION_KEY):
+            return
+        for values in DEFAULT_PROFILES:
+            profile = session.get(ProbeProfile, values["id"])
+            if profile is not None and profile.model == LEGACY_DEFAULT_PROFILE_MODEL:
+                profile.model = str(values["model"])
+                profile.updated_at = utc_now()
+        self._mark_migration(session, DEFAULT_PROFILES_MODEL_MIGRATION_KEY)
 
     def _apply_profile_field_migration(
         self,

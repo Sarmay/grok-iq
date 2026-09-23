@@ -196,12 +196,12 @@ class RegisterIntegrationService:
                 len(run_ids),
             )
         except (RegisteredAccountPending, QueueFullError, RunStateError) as exc:
-            self._retry_or_fail(event_id, attempts, exc)
+            await self._retry_or_fail(event_id, attempts, exc)
         except ValueError as exc:
-            self._retry_or_fail(event_id, attempts, exc)
+            await self._retry_or_fail(event_id, attempts, exc)
         except Exception as exc:
             logger.exception("register webhook processing failed event_id=%s", event_id)
-            self._retry_or_fail(event_id, attempts, exc)
+            await self._retry_or_fail(event_id, attempts, exc)
 
     async def _registered_account(self, event: dict[str, Any]) -> dict[str, Any]:
         account = await self.account_service.find_registered_account(
@@ -349,9 +349,12 @@ class RegisterIntegrationService:
             retry_after_seconds=math.ceil(remaining),
         )
 
-    def _retry_or_fail(self, event_id: str, attempts: int, exc: Exception) -> None:
+    async def _retry_or_fail(
+        self, event_id: str, attempts: int, exc: Exception
+    ) -> None:
         if attempts >= MAX_EVENT_ATTEMPTS:
             self.repository.fail(event_id, str(exc))
+            await self._finalize_failed_event(event_id, str(exc))
             return
         requested_delay = float(getattr(exc, "retry_after_seconds", 0) or 0)
         delay = requested_delay or RETRY_DELAYS[
@@ -365,6 +368,42 @@ class RegisterIntegrationService:
             delay,
             exc,
         )
+
+    async def _finalize_failed_event(self, event_id: str, error: str) -> None:
+        """Close out an event that gave up before any register probe ran.
+
+        The priority hold may already be in place.  Keep the account parked,
+        but record the real cause instead of a probe verdict, and tell
+        grok-register so the registration does not wait forever.
+        """
+
+        event = self.repository.get_event(event_id) or {"event_id": event_id}
+        status = str(event.get("priority_hold_status") or PRIORITY_HOLD_NONE)
+        if status in {PRIORITY_HOLD_HELD, PRIORITY_HOLD_RESTORE_FAILED}:
+            self.repository.mark_priority_kept(
+                event_id, self._event_failed_reason(error)
+            )
+            logger.info(
+                "register priority kept after event failure event_id=%s "
+                "account_id=%s error=%s",
+                event_id,
+                event.get("resolved_account_id") or event.get("grok2api_account_id"),
+                error,
+            )
+        await self.maybe_enqueue_register_callback(
+            event_id,
+            event={**event, "status": "failed", "last_error": error},
+        )
+
+    @staticmethod
+    def _event_failed_reason(error: str) -> str:
+        detail = str(error or "").strip()
+        base = "注册事件处理失败，探针未执行，保持降低后的 grok2api 优先级"
+        return f"{base}：{detail}" if detail else base
+
+    @staticmethod
+    def _probe_never_ran(event: dict[str, Any], runs: list[dict[str, Any]]) -> bool:
+        return not runs and str(event.get("status") or "") == "failed"
 
     async def maybe_restore_priority_hold(self, run: dict[str, Any]) -> None:
         event_id = str(run.get("source_event_id") or "").strip()
@@ -450,11 +489,12 @@ class RegisterIntegrationService:
         if outcome == "pending":
             return
         if outcome != "passed":
-            reason = (
-                "注册探针样本不足，保持降低后的 grok2api 优先级"
-                if outcome == "insufficient"
-                else "注册探针未通过，保持降低后的 grok2api 优先级"
-            )
+            if outcome == "insufficient":
+                reason = "注册探针样本不足，保持降低后的 grok2api 优先级"
+            elif self._probe_never_ran(event, self._event_runs(event_id)):
+                reason = self._event_failed_reason(str(event.get("last_error") or ""))
+            else:
+                reason = "注册探针未通过，保持降低后的 grok2api 优先级"
             self.repository.mark_priority_kept(event_id, reason)
             logger.info(
                 "register priority kept after %s probe event_id=%s account_id=%s",
@@ -465,14 +505,15 @@ class RegisterIntegrationService:
             return
         await self._restore_held_priority(event)
 
+    def _event_runs(self, event_id: str) -> list[dict[str, Any]]:
+        probe_repository = getattr(self.probes, "repository", None)
+        if probe_repository is None or not event_id:
+            return []
+        return list(probe_repository.list_runs_for_source_event(event_id))
+
     def _register_probe_outcome(self, event: dict[str, Any]) -> str:
         event_id = str(event.get("event_id") or "")
-        probe_repository = getattr(self.probes, "repository", None)
-        runs = (
-            probe_repository.list_runs_for_source_event(event_id)
-            if probe_repository is not None
-            else []
-        )
+        runs = self._event_runs(event_id)
         if not runs:
             event_status = str(event.get("status") or "")
             if event_status == "completed":

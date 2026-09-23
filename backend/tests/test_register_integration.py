@@ -624,6 +624,79 @@ async def test_priority_hold_keeps_low_priority_when_probe_fails():
 
 
 @pytest.mark.asyncio
+async def test_event_failure_after_hold_records_real_reason_and_notifies():
+    settings = Settings(
+        initial_probe_on_register=True,
+        register_probe_stabilization_seconds=0,
+        register_priority_hold=-500,
+        register_callback_enabled=True,
+        register_callback_url="http://register.test/notify",
+    )
+    probes = RegisterProbeManager()
+
+    async def enqueue_register_event(**values: Any) -> dict[str, Any]:
+        raise ValueError("探针方案不存在: quality-marker")
+
+    probes.enqueue_register_event = enqueue_register_event  # type: ignore[method-assign]
+    service, repository, account_service, _ = _service(settings=settings, probes=probes)
+
+    await service._process_claimed(
+        {
+            "event_id": "event-give-up",
+            "attempts": 20,
+            "grok2api_account_id": 17,
+            "email": "new@example.test",
+            "bot_risk": False,
+        }
+    )
+
+    assert repository.failed is not None
+    assert account_service.client.priorities[17] == -500
+    event = repository.get_event("event-give-up")
+    assert event is not None
+    assert event["priority_hold_status"] == "kept"
+    assert "探针未执行" in event["priority_hold_error"]
+    assert "quality-marker" in event["priority_hold_error"]
+    assert "未通过" not in event["priority_hold_error"]
+    callback = repository.callbacks["event-give-up"]["payload"]
+    assert callback["probe_outcome"] == "failed"
+    assert callback["verdict"] == "probe_failed"
+    assert callback["account_id"] == 17
+
+    await service.scan_priority_holds()
+
+    assert repository.get_event("event-give-up")["priority_hold_status"] == "kept"
+
+
+@pytest.mark.asyncio
+async def test_hold_scan_explains_failed_event_without_runs():
+    service, repository, account_service, _ = _service(
+        settings=Settings(
+            initial_probe_on_register=True,
+            register_probe_stabilization_seconds=0,
+            register_priority_hold=-500,
+        )
+    )
+    repository.events["event-legacy"] = {
+        "event_id": "event-legacy",
+        "status": "failed",
+        "last_error": "探针队列已达到上限 50",
+        "resolved_account_id": 17,
+        "priority_hold_status": "held",
+        "original_priority": 3,
+        "held_priority": -500,
+    }
+
+    await service.scan_priority_holds()
+
+    event = repository.get_event("event-legacy")
+    assert event["priority_hold_status"] == "kept"
+    assert "探针未执行" in event["priority_hold_error"]
+    assert "探针队列已达到上限 50" in event["priority_hold_error"]
+    assert 17 not in account_service.client.priorities
+
+
+@pytest.mark.asyncio
 async def test_priority_hold_keeps_low_priority_when_samples_insufficient():
     service, repository, account_service, probes = _service(
         settings=Settings(

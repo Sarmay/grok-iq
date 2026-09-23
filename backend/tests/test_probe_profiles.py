@@ -729,3 +729,52 @@ async def test_quality_guard_probe_unavailable_explains_enable_steps(
     assert "批量设置出口" in str(error)
     assert "qualityGuard.enabled: true" in str(error)
     assert "sidecar 容器可以不启动" in str(error)
+
+
+class SplitUtf8StreamResponse(StubStreamResponse):
+    async def aiter_content(self, *args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+        event = (
+            'data: {"type":"response.output_text.delta",'
+            '"delta":"探针校验通过"}\n\n'
+        ).encode()
+        # Split inside the three UTF-8 bytes of "验", as a network chunk may.
+        split = event.index("验".encode()) + 1
+        yield event[:split]
+        yield event[split:]
+        yield (
+            b'data: {"type":"response.completed","response":{"usage":{"output_tokens":6,'
+            b'"output_tokens_details":{"reasoning_tokens":0}}}}\n\n'
+        )
+
+
+@pytest.mark.asyncio
+async def test_chat_probe_decodes_utf8_split_across_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class SplitSession(StubStreamSession):
+        async def post(self, url: str, *, json: dict[str, Any], **kwargs: Any):
+            await super().post(url, json=json, **kwargs)
+            return SplitUtf8StreamResponse()
+
+    client = Grok2APIClient(Settings())
+    monkeypatch.setattr(client, "_session", lambda: SplitSession({}))
+
+    async def find_audit(_: str) -> dict[str, Any]:
+        return {"id": "1", "accountId": "7", "egressNodeId": "2"}
+
+    monkeypatch.setattr(client, "find_audit", find_audit)
+
+    result = await client.chat_probe(
+        api_key="key",
+        public_model="model",
+        account_id=7,
+        system_prompt="",
+        prompt="prompt",
+        expected="探针校验通过",
+        max_output_tokens=0,
+        temperature=None,
+        extra_body={},
+    )
+
+    assert result.response_text == "探针校验通过"
+    assert result.expected_matched is True

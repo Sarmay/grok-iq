@@ -2011,6 +2011,74 @@ async def test_quarantine_recheck_plan_activates_disabled_account_on_current_egr
 
 
 @pytest.mark.asyncio
+async def test_quarantine_recheck_run_skips_account_restored_while_queued(
+    tmp_path: Path,
+):
+    database = Database(tmp_path / "grokiq.db")
+    database.initialize()
+    repository = ProbeRepository(database)
+    repository.seed_defaults()
+    accounts = AccountRepository(database)
+    accounts.set_manual_status(
+        account_id=10,
+        status="quarantined",
+        note="grok2api 降智停用",
+        quarantine_until=None,
+        previous_upstream_enabled=False,
+        disabled_by_monitor=False,
+        recovery_guarded=False,
+        source="quality_retry",
+    )
+    client = DisabledFakeGrokClient()
+    client.account_egress_node_id = 7
+    client.account_egress_mode = "manual"
+    manager = ProbeManager(
+        settings=Settings(
+            database_path=tmp_path / "grokiq.db",
+            scheduler_enabled=False,
+            probe_worker_concurrency=1,
+            probe_step_delay_seconds=0,
+            probe_current_egress_interval_seconds=0,
+            scheduled_probe_register_cooldown_minutes=0,
+        ),
+        repository=repository,
+        accounts=accounts,
+        client=client,  # type: ignore[arg-type]
+        thresholds=Thresholds(),
+    )
+    plan_id = repository.create_plan(
+        {
+            "name": "quarantine-recheck",
+            "description": "",
+            "profile_id": "quality-marker",
+            "profile_ids": ["quality-marker"],
+            "account_scope": "quarantined",
+            "account_ids": [],
+            "proxy_targets": [{"kind": "current", "id": None}],
+            "execution_mode": "chat",
+            "rounds": 1,
+            "cron_expression": "15 */6 * * *",
+            "timezone": "UTC",
+            "enabled": True,
+            "overlap_policy": "skip",
+            "priority": 200,
+        }
+    )
+    result = await manager.enqueue_plan(repository.get_plan(plan_id) or {})
+    assert result["created"] == 1
+    accounts.mark_restored(10, recovery_guarded=False)
+
+    await manager.start()
+    try:
+        detail = await wait_for_terminal_run(repository, result["runIds"][0])
+        assert detail["run"]["status"] == "failed"
+        assert "已停用" in detail["run"]["error"]
+        assert client.routing_updates == []
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.asyncio
 async def test_current_egress_probe_keeps_metrics_when_audited_node_differs(tmp_path: Path):
     database = Database(tmp_path / "grokiq.db")
     database.initialize()

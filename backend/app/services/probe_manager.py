@@ -487,7 +487,12 @@ class ProbeManager:
         if not plan_id:
             return False
         plan = self.repository.get_plan(plan_id) or {}
-        return str(plan.get("account_scope") or "") == "quarantined"
+        if str(plan.get("account_scope") or "") != "quarantined":
+            return False
+        # The account may have been restored while the run was queued; a
+        # disabled, no longer isolated account must not be activated.
+        assessment = self.accounts.get_assessment(int(run.get("account_id") or 0)) or {}
+        return str(assessment.get("monitor_status") or "") == "quarantined"
 
     def _ensure_account_restore_ready(self, account_id: int) -> None:
         if self.repository.has_blocking_account_restore(account_id=account_id):

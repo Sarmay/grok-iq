@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import hashlib
 import json
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from app.integrations.grok2api.http_session import abort_curl_stream
@@ -22,6 +23,12 @@ class ChatProbeStreamState:
     chunk_count: int = 0
     received_bytes: int = 0
     buffer: str = ""
+    # Network chunks can split a multi-byte UTF-8 character; decoding each
+    # chunk on its own turned such characters into U+FFFD and broke marker
+    # matching on Chinese output.
+    decoder: codecs.IncrementalDecoder = field(
+        default_factory=lambda: codecs.getincrementaldecoder("utf-8")("replace")
+    )
     terminal: bool = False
     status_code: int = 0
 
@@ -188,7 +195,7 @@ class ChatProbeRunner:
         state.received_bytes += len(chunk)
         if state.received_bytes > self.max_stream_bytes():
             raise self.error_type("探针流式响应超过 4 MiB")
-        state.buffer += chunk.decode("utf-8", "replace")
+        state.buffer += state.decoder.decode(chunk)
         state.buffer = state.buffer.replace("\r\n", "\n")
         events = state.buffer.split("\n\n")
         state.buffer = events.pop()

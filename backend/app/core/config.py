@@ -12,6 +12,10 @@ from app.reasoning_policy import default_reasoning_model_policies
 DEFAULT_DATABASE_PATH = Path(__file__).resolve().parents[2] / "data" / "grokiq.db"
 
 DEFAULT_REGISTER_PROBE_PROFILE_IDS = ["quality-marker"]
+QuarantineRecheckSource = Literal[
+    "probe", "request_audit", "quality_retry", "sso", "register", "manual"
+]
+DEFAULT_QUARANTINE_RECHECK_RESTORE_SOURCES = ("probe", "quality_retry")
 DEFAULT_REGISTER_PROBE_STABILIZATION_SECONDS = 15.0
 REGISTER_PROBE_EXECUTION_MODE = "chat"
 REGISTER_PROBE_ROUNDS = 3
@@ -260,6 +264,14 @@ class Settings(BaseSettings):
         default=60, ge=15, le=600
     )
     quarantine_minutes: int = Field(default=30, ge=1, le=7 * 24 * 60)
+    # Re-check isolated accounts with probes and lift the isolation once the
+    # evidence turns clean.  Sources are disposition sources (probe, manual,
+    # register, request_audit, quality_retry, sso).
+    quarantine_recheck_restore_enabled: bool = False
+    quarantine_recheck_pass_count: int = Field(default=2, ge=1, le=10)
+    quarantine_recheck_restore_sources: list[QuarantineRecheckSource] = Field(
+        default_factory=lambda: list(DEFAULT_QUARANTINE_RECHECK_RESTORE_SOURCES)
+    )
 
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
@@ -360,6 +372,9 @@ class Settings(BaseSettings):
         "quality_retry_isolation_enabled",
         "quality_retry_isolation_interval_seconds",
         "quarantine_minutes",
+        "quarantine_recheck_restore_enabled",
+        "quarantine_recheck_pass_count",
+        "quarantine_recheck_restore_sources",
     )
     SECRET_RUNTIME_FIELDS: ClassVar[frozenset[str]] = frozenset(
         {

@@ -50,7 +50,10 @@ class ProbePlanEnqueuer:
         account_scope, requested_ids, upstream_accounts = await self._resolve_accounts(plan)
         targets = await self.target_validator.validate(raw_targets, execution_mode=execution_mode)
         available_accounts, missing, invalid, diagnostic = self._select_accounts(
-            requested_ids, upstream_accounts, targets
+            requested_ids,
+            upstream_accounts,
+            targets,
+            allow_disabled=account_scope == "quarantined",
         )
         async with self.enqueue_lock:
             result = self.repository.create_plan_runs_batch(
@@ -103,8 +106,21 @@ class ProbePlanEnqueuer:
         if account_scope == "fixed":
             requested_ids = {int(value) for value in plan["account_ids"]}
             return account_scope, requested_ids, await self.client.list_all_accounts(requested_ids)
-        if account_scope not in {"all_enabled", "risky_enabled"}:
+        if account_scope not in {"all_enabled", "risky_enabled", "quarantined"}:
             raise ValueError("Cron 计划账号范围无效")
+        if account_scope == "quarantined":
+            # Isolated accounts are usually disabled upstream. The call runner
+            # activates them in diagnostic mode for each sample, so neither the
+            # enabled filter below nor target validation may drop them.
+            quarantined_ids = self.accounts.quarantined_account_ids()
+            upstream_accounts = [
+                account
+                for account in await self.client.list_all_accounts()
+                if int(account.get("id") or 0) in quarantined_ids
+            ]
+            requested_ids = {int(account.get("id") or 0) for account in upstream_accounts}
+            requested_ids.discard(0)
+            return account_scope, requested_ids, upstream_accounts
         upstream_accounts = await self.client.list_all_accounts()
         upstream_accounts = [
             account for account in upstream_accounts if bool(account.get("enabled"))
@@ -125,6 +141,8 @@ class ProbePlanEnqueuer:
         requested_ids: set[int],
         upstream_accounts: list[dict[str, Any]],
         targets: list[dict[str, Any]],
+        *,
+        allow_disabled: bool = False,
     ) -> tuple[list[dict[str, Any]], list[int], list[dict[str, Any]], list[int]]:
         by_id = {int(value.get("id") or 0): value for value in upstream_accounts}
         missing: list[int] = []
@@ -137,7 +155,9 @@ class ProbePlanEnqueuer:
                 missing.append(account_id)
                 continue
             try:
-                ProbeTargetValidator.validate_account_for_targets(account, targets)
+                ProbeTargetValidator.validate_account_for_targets(
+                    account, targets, allow_disabled=allow_disabled
+                )
             except ValueError as exc:
                 invalid.append({"id": account_id, "reason": str(exc)})
                 continue

@@ -43,6 +43,7 @@ import {
 } from './settings-format'
 import {
   AUTO_ISOLATION_MIN_STATUS_OPTIONS,
+  QUARANTINE_RECHECK_SOURCE_OPTIONS,
   setRiskRuleEnabled,
   setRiskRulePriority,
   type SettingsForm,
@@ -841,6 +842,70 @@ function IsolationZonePanel({
                   set('qualityRetryIsolationIntervalSeconds', value)
                 }
               />
+            </div>
+          ) : null}
+        </SettingListItem>
+        <SettingListItem
+          label='复检通过自动恢复'
+          description='配合账号范围为「隔离/降智账号复检」的 Cron 计划定时复检。隔离后产生的探针连续通过指定次数（无异常、无警告、无错误）即解除隔离，并恢复隔离前的上游启用状态。默认关闭。'
+          checked={form.quarantineRecheckRestoreEnabled}
+          onCheckedChange={(value) =>
+            set('quarantineRecheckRestoreEnabled', value)
+          }
+        >
+          {form.quarantineRecheckRestoreEnabled ? (
+            <div className='flex flex-col gap-3'>
+              <div className='max-w-xs'>
+                <NumberField
+                  label='连续通过次数'
+                  hint='1–10 次，只统计隔离之后的探针。'
+                  value={form.quarantineRecheckPassCount}
+                  min={1}
+                  max={10}
+                  suffix='次'
+                  onChange={(value) => set('quarantineRecheckPassCount', value)}
+                />
+              </div>
+              <div className='flex flex-col gap-2'>
+                <span className='text-sm font-medium'>
+                  允许自动恢复的隔离来源
+                </span>
+                <div className='flex flex-wrap gap-2'>
+                  {QUARANTINE_RECHECK_SOURCE_OPTIONS.map((option) => {
+                    const active =
+                      form.quarantineRecheckRestoreSources.includes(
+                        option.value
+                      )
+                    return (
+                      <Button
+                        key={option.value}
+                        type='button'
+                        size='sm'
+                        variant={active ? 'default' : 'outline'}
+                        aria-pressed={active}
+                        onClick={() =>
+                          set(
+                            'quarantineRecheckRestoreSources',
+                            active
+                              ? form.quarantineRecheckRestoreSources.filter(
+                                  (value) => value !== option.value
+                                )
+                              : [
+                                  ...form.quarantineRecheckRestoreSources,
+                                  option.value,
+                                ]
+                          )
+                        }
+                      >
+                        {option.label}
+                      </Button>
+                    )
+                  })}
+                </div>
+                <p className='text-xs leading-5 text-muted-foreground'>
+                  来源不在列表内的隔离只复检不恢复。人工隔离建议保持不勾选。
+                </p>
+              </div>
             </div>
           ) : null}
         </SettingListItem>

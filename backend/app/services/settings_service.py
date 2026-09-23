@@ -371,6 +371,11 @@ class RuntimeSettingsService:
                 s.quality_retry_isolation_interval_seconds
             ),
             "quarantineMinutes": s.quarantine_minutes,
+            "quarantineRecheckRestoreEnabled": s.quarantine_recheck_restore_enabled,
+            "quarantineRecheckPassCount": s.quarantine_recheck_pass_count,
+            "quarantineRecheckRestoreSources": list(
+                s.quarantine_recheck_restore_sources
+            ),
             "bootstrap": {
                 "host": s.host,
                 "port": s.port,

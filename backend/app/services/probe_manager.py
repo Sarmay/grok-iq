@@ -471,8 +471,23 @@ class ProbeManager:
         ProbeTargetValidator.validate_account(account)
 
     @classmethod
-    def _validate_account_for_targets(cls, account: dict[str, Any], targets: list[dict[str, Any]]) -> None:
-        ProbeTargetValidator.validate_account_for_targets(account, targets)
+    def _validate_account_for_targets(
+        cls,
+        account: dict[str, Any],
+        targets: list[dict[str, Any]],
+        *,
+        allow_disabled: bool = False,
+    ) -> None:
+        ProbeTargetValidator.validate_account_for_targets(
+            account, targets, allow_disabled=allow_disabled
+        )
+
+    def _is_quarantine_recheck_run(self, run: dict[str, Any]) -> bool:
+        plan_id = str(run.get("plan_id") or "")
+        if not plan_id:
+            return False
+        plan = self.repository.get_plan(plan_id) or {}
+        return str(plan.get("account_scope") or "") == "quarantined"
 
     def _ensure_account_restore_ready(self, account_id: int) -> None:
         if self.repository.has_blocking_account_restore(account_id=account_id):
@@ -994,6 +1009,18 @@ class ProbeManager:
             self.repository.clear_upstream_context(run_id)
         self._wake.set()
         return self.repository.get_run(run_id) or {}
+
+    async def maybe_release_quarantine_after_recheck(
+        self,
+        account_id: int,
+        assessment: dict[str, Any],
+    ) -> dict[str, Any]:
+        if self.account_service is None:
+            return assessment
+        restored = await self.account_service.release_quarantine_after_recheck(
+            account_id, assessment
+        )
+        return restored or assessment
 
     async def _apply_auto_quarantine(
         self,

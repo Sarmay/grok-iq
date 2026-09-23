@@ -637,7 +637,9 @@ def _isolation_service(
     return database, accounts, probe_repo, isolation_client, service
 
 
-def _add_probe_sample(probes: ProbeRepository, account_id: int) -> str:
+def _add_probe_sample(
+    probes: ProbeRepository, account_id: int, *, classification: str = "normal"
+) -> str:
     probes.seed_defaults()
     run_id = probes.create_run(
         account_id=account_id,
@@ -670,7 +672,7 @@ def _add_probe_sample(probes: ProbeRepository, account_id: int) -> str:
             "first_token_share": 0.5,
             "tps": 50,
             "expected_matched": True,
-            "classification": "normal",
+            "classification": classification,
             "severity": 0,
             "error": "",
         },
@@ -1496,3 +1498,119 @@ def test_isolation_stats_uses_register_events_and_current_zone(tmp_path: Path):
     assert stats["registered"]["failed"] == 1
     assert stats["registered"]["isolated"] == 2
     assert stats["registered"]["isolatedInRange"] == 1
+
+
+def _recheck_service(
+    tmp_path: Path,
+    *,
+    client: IsolationClient | None = None,
+    pass_count: int = 2,
+    sources: list[str] | None = None,
+) -> tuple[AccountRepository, ProbeRepository, IsolationClient, AccountService]:
+    _database, accounts, probes, isolation_client, service = _isolation_service(
+        tmp_path, client=client
+    )
+    service.settings.quarantine_recheck_restore_enabled = True
+    service.settings.quarantine_recheck_pass_count = pass_count
+    service.settings.quarantine_recheck_restore_sources = sources or [
+        "probe",
+        "quality_retry",
+    ]
+    return accounts, probes, isolation_client, service  # type: ignore[return-value]
+
+
+@pytest.mark.asyncio
+async def test_recheck_restores_after_consecutive_clean_runs(tmp_path: Path):
+    accounts, probes, client, service = _recheck_service(tmp_path)
+    await service.isolate_account(1, note="探针隔离", source="probe")
+    _add_probe_sample(probes, 1)
+
+    assert await service.release_quarantine_after_recheck(1, None) is None
+    _add_probe_sample(probes, 1)
+    restored = await service.release_quarantine_after_recheck(1, None)
+
+    assert restored is not None
+    assert restored["monitor_status"] == "healthy"
+    assert restored["disposition"] == {}
+    assert client.enabled_calls == [(1, False), (1, True)]
+    alert = accounts.list_alerts()[0]
+    assert alert["kind"] == "recheck_restore"
+    assert alert["detail"]["passCount"] == 2
+    assert alert["detail"]["reenabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_recheck_anomaly_breaks_clean_streak(tmp_path: Path):
+    accounts, probes, client, service = _recheck_service(tmp_path)
+    await service.isolate_account(1, note="探针隔离", source="probe")
+    _add_probe_sample(probes, 1)
+    _add_probe_sample(probes, 1, classification="marker_miss")
+
+    assert await service.release_quarantine_after_recheck(1, None) is None
+    assert (accounts.get_assessment(1) or {})["monitor_status"] == "quarantined"
+    assert client.enabled_calls == [(1, False)]
+
+
+@pytest.mark.asyncio
+async def test_recheck_ignores_runs_before_isolation(tmp_path: Path):
+    accounts, probes, _client, service = _recheck_service(tmp_path)
+    _add_probe_sample(probes, 1)
+    _add_probe_sample(probes, 1)
+    await service.isolate_account(1, note="探针隔离", source="probe")
+
+    assert await service.release_quarantine_after_recheck(1, None) is None
+    assert (accounts.get_assessment(1) or {})["monitor_status"] == "quarantined"
+
+
+@pytest.mark.asyncio
+async def test_recheck_reenables_quality_retry_account_disabled_by_grok2api(
+    tmp_path: Path,
+):
+    client = IsolationClient(
+        [
+            {
+                "id": "1",
+                "name": "Alpha",
+                "email": "alpha@example.test",
+                "enabled": False,
+                "authStatus": "active",
+                "lastError": "missing_thinking_disabled",
+            }
+        ]
+    )
+    accounts, probes, _client, service = _recheck_service(
+        tmp_path, client=client, pass_count=1
+    )
+    isolated = await service.isolate_account(
+        1, note="grok2api 降智停用", source="quality_retry"
+    )
+    assert isolated["actionStatus"] == "already_disabled"
+    assert isolated["assessment"]["previous_upstream_enabled"] is False
+    _add_probe_sample(probes, 1)
+
+    restored = await service.release_quarantine_after_recheck(1, None)
+
+    assert restored is not None
+    assert restored["monitor_status"] == "healthy"
+    assert client.enabled_calls == [(1, True)]
+
+
+@pytest.mark.asyncio
+async def test_recheck_skips_sources_not_allowed_and_disabled_switch(tmp_path: Path):
+    accounts, probes, client, service = _recheck_service(
+        tmp_path, pass_count=1, sources=["probe"]
+    )
+    await service.isolate_account(1, note="人工隔离", source="manual")
+    _add_probe_sample(probes, 1)
+
+    assert service.recheck_release_blocker(accounts.get_assessment(1)) == (
+        "source_not_allowed:manual"
+    )
+    assert await service.release_quarantine_after_recheck(1, None) is None
+
+    await service.isolate_account(2, note="探针隔离", source="probe")
+    _add_probe_sample(probes, 2)
+    service.settings.quarantine_recheck_restore_enabled = False
+    assert await service.release_quarantine_after_recheck(2, None) is None
+    assert (accounts.get_assessment(2) or {})["monitor_status"] == "quarantined"
+    assert client.enabled_calls == [(1, False), (2, False)]

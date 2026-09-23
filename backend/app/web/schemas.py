@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.core.config import QuarantineRecheckSource
+
 
 class AuthLoginInput(BaseModel):
     username: str = Field(min_length=1, max_length=64)
@@ -596,6 +598,15 @@ class RuntimeSettingsInput(BaseModel):
         le=600,
     )
     quarantine_minutes: int | None = Field(default=None, alias="quarantineMinutes", ge=1, le=7 * 24 * 60)
+    quarantine_recheck_restore_enabled: bool | None = Field(
+        default=None, alias="quarantineRecheckRestoreEnabled"
+    )
+    quarantine_recheck_pass_count: int | None = Field(
+        default=None, alias="quarantineRecheckPassCount", ge=1, le=10
+    )
+    quarantine_recheck_restore_sources: list[QuarantineRecheckSource] | None = Field(
+        default=None, alias="quarantineRecheckRestoreSources", max_length=6
+    )
     clear_secrets: list[SecretSettingName] = Field(default_factory=list, alias="clearSecrets")
 
     def runtime_changes(self) -> dict[str, Any]:
@@ -662,7 +673,7 @@ class ProbePlanInput(BaseModel):
     description: str = Field(default="", max_length=500)
     profile_id: str = ""
     profile_ids: list[str] = Field(default_factory=list, max_length=1000)
-    account_scope: Literal["fixed", "all_enabled", "risky_enabled"] = "fixed"
+    account_scope: Literal["fixed", "all_enabled", "risky_enabled", "quarantined"] = "fixed"
     account_ids: list[int] = Field(default_factory=list, max_length=100_000)
     proxy_targets: list[ProxyTargetInput] = Field(min_length=1, max_length=20)
     execution_mode: Literal["chat", "quality_test"] = "chat"

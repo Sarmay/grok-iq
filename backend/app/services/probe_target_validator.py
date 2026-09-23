@@ -27,13 +27,24 @@ class ProbeTargetValidator:
 
     @classmethod
     def validate_account_for_targets(
-        cls, account: dict[str, Any], targets: list[dict[str, Any]]
+        cls,
+        account: dict[str, Any],
+        targets: list[dict[str, Any]],
+        *,
+        allow_disabled: bool = False,
     ) -> None:
+        """Validate one account for the selected targets.
+
+        ``allow_disabled`` is reserved for isolation re-checks: the call
+        runner activates the account in diagnostic mode for each sample and
+        restores the recorded settings afterwards.
+        """
+
         cls.validate_account(account)
         if not any(target.get("kind") == "current" for target in targets):
             return
         account_id = int(account.get("id") or 0)
-        if not bool(account.get("enabled")):
+        if not bool(account.get("enabled")) and not allow_disabled:
             raise ValueError(f"账号 {account_id} 已停用，正常定检不会临时激活；请启用账号或改用人工诊断")
         if int(account.get("egressNodeId") or 0) <= 0:
             raise ValueError(f"账号 {account_id} 未绑定固定出口；请先在 grok2api 绑定账号出口")

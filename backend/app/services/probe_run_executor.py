@@ -115,7 +115,11 @@ class ProbeRunExecutor:
         run_id = str(run["id"])
         account_id = int(run["account_id"])
         account = await manager.client.get_account(account_id)
-        manager._validate_account_for_targets(account, list(run["proxy_targets"]))
+        manager._validate_account_for_targets(
+            account,
+            list(run["proxy_targets"]),
+            allow_disabled=manager._is_quarantine_recheck_run(run),
+        )
         state.original_node_id = int(account.get("egressNodeId") or 0) or None
         state.original_mode = str(account.get("egressAssignmentMode") or "")
         priority_value = account.get("priority")
@@ -591,6 +595,17 @@ class ProbeRunExecutor:
                     # send the recalculated high-risk assessment below.
                     logger.exception(
                         "auto quarantine failed worker=%s run=%s account=%s",
+                        runtime.worker_id,
+                        run_id,
+                        account_id,
+                    )
+                try:
+                    assessment = await manager.maybe_release_quarantine_after_recheck(
+                        account_id, assessment
+                    )
+                except Exception:
+                    logger.exception(
+                        "recheck restore failed worker=%s run=%s account=%s",
                         runtime.worker_id,
                         run_id,
                         account_id,

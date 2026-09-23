@@ -187,6 +187,42 @@ async def test_all_enabled_scope_resolves_live_accounts_at_trigger_time(tmp_path
     assert [run["account_id"] for run in runs] == [10]
 
 
+@pytest.mark.asyncio
+async def test_quarantined_scope_includes_disabled_isolated_accounts(tmp_path: Path):
+    repository = build_repository(tmp_path)
+    plan_id = create_plan(repository, account_scope="quarantined")
+    accounts = AccountRepository(repository.database)
+    accounts.set_manual_status(
+        account_id=11,
+        status="quarantined",
+        note="grok2api 降智停用",
+        quarantine_until=None,
+        previous_upstream_enabled=False,
+        disabled_by_monitor=False,
+        recovery_guarded=False,
+        source="quality_retry",
+    )
+    manager = ProbeManager(
+        settings=Settings(
+            database_path=tmp_path / "grokiq.db",
+            scheduled_probe_register_cooldown_minutes=0,
+        ),
+        repository=repository,
+        accounts=accounts,
+        client=DynamicAccountClient(),  # type: ignore[arg-type]
+        thresholds=Thresholds(),
+    )
+
+    result = await manager.enqueue_plan(repository.get_plan(plan_id) or {})
+
+    assert result["accountScope"] == "quarantined"
+    assert result["resolvedAccountCount"] == 1
+    assert result["created"] == 1
+    assert result["diagnosticAccountIds"] == [11]
+    runs = repository.list_runs(page=1, page_size=20)["items"]
+    assert [run["account_id"] for run in runs] == [11]
+
+
 def test_recent_register_probe_is_excluded_from_scheduled_plan(tmp_path: Path):
     repository = build_repository(tmp_path)
     plan_id = create_plan(repository, account_scope="fixed")

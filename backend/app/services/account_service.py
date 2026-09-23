@@ -1,13 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from datetime import datetime, timedelta
 from typing import Any
 
-from app.core.clock import app_isoformat, to_app_timezone, utc_now
+from app.core.clock import (
+    app_isoformat,
+    parse_optional_datetime,
+    to_app_timezone,
+    utc_now,
+)
 from app.core.config import Settings
-from app.core.disposition import evidence_from, matches_disposition_source
+from app.core.disposition import (
+    evidence_from,
+    matches_disposition_source,
+    normalize_disposition_source,
+)
 from app.integrations.grok2api.client import Grok2APIClient, IntegrationError
 from app.persistence.account_repository import AccountRepository
 from app.persistence.probe_repository import ProbeRepository
@@ -16,6 +26,8 @@ from app.persistence.request_audit_repository import RequestAuditRepository
 from app.persistence.sso_report_repository import SsoReportRepository
 from app.services.account_timeline import build_account_timeline
 from app.services.isolation_stats import compute_isolation_stats, resolve_stats_range
+
+logger = logging.getLogger(__name__)
 
 QUARANTINE_RECOVERY_PRIORITY = -2_000_000_000
 PUBLIC_UPSTREAM_SUMMARY_TTL_SECONDS = 10.0
@@ -1281,6 +1293,91 @@ class AccountService:
         result["requested"] = len(unique_ids)
         result["skippedNotQuarantinedAccountIds"] = sorted(skipped_not_quarantined)
         return result
+
+    def recheck_release_blocker(self, assessment: dict[str, Any] | None) -> str:
+        """Explain why a re-check cannot lift the isolation, or return ''."""
+
+        if not self.settings.quarantine_recheck_restore_enabled:
+            return "recheck_disabled"
+        value = assessment or {}
+        if str(value.get("monitor_status") or "") != "quarantined":
+            return "not_quarantined"
+        disposition = value.get("disposition")
+        disposition = disposition if isinstance(disposition, dict) else {}
+        source = normalize_disposition_source(disposition.get("source"))
+        allowed = {
+            normalize_disposition_source(item)
+            for item in self.settings.quarantine_recheck_restore_sources
+        }
+        if source not in allowed:
+            return f"source_not_allowed:{source}"
+        return ""
+
+    async def release_quarantine_after_recheck(
+        self,
+        account_id: int,
+        assessment: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """Lift an isolation once enough consecutive re-check runs are clean.
+
+        Returns the refreshed assessment when the account was restored, or
+        ``None`` when nothing changed.  Priority is left untouched: isolation
+        never altered it, so the account resumes at its pre-isolation value.
+        """
+
+        normalized_account_id = int(account_id)
+        current = assessment or self.accounts.get_assessment(normalized_account_id) or {}
+        if self.recheck_release_blocker(current):
+            return None
+        disposition = current.get("disposition")
+        disposition = disposition if isinstance(disposition, dict) else {}
+        since = parse_optional_datetime(disposition.get("at"))
+        required = int(self.settings.quarantine_recheck_pass_count)
+        streak = self.probes.count_consecutive_clean_runs(
+            normalized_account_id,
+            since=since,
+            limit=required,
+        )
+        if streak < required:
+            return None
+        if normalized_account_id in self.probes.account_settings_locked_ids(
+            {normalized_account_id}
+        ):
+            return None
+        # grok2api disables 降智 accounts itself before GrokIQ isolates them,
+        # so their recorded state is "already disabled". A clean re-check is
+        # exactly the evidence that lifts that stop; leaving the account
+        # disabled would let the quality-retry scan isolate it again.
+        source = normalize_disposition_source(disposition.get("source"))
+        should_enable = source == "quality_retry" or (
+            bool(current.get("disabled_by_monitor"))
+            and bool(current.get("previous_upstream_enabled"))
+        )
+        if should_enable:
+            await self.client.set_account_enabled(normalized_account_id, True)
+        self.accounts.mark_restored(normalized_account_id, recovery_guarded=False)
+        restored = self.accounts.get_assessment(normalized_account_id) or {}
+        self.accounts.create_alert(
+            account_id=normalized_account_id,
+            kind="recheck_restore",
+            severity="info",
+            title="复检通过，账号已自动恢复",
+            detail={
+                "source": str(disposition.get("source") or ""),
+                "passCount": streak,
+                "requiredPassCount": required,
+                "reenabled": should_enable,
+                "isolatedAt": str(disposition.get("at") or ""),
+            },
+        )
+        logger.info(
+            "recheck restore account=%s source=%s passes=%s reenabled=%s",
+            normalized_account_id,
+            disposition.get("source"),
+            streak,
+            should_enable,
+        )
+        return restored
 
     async def recover_due_quarantines(self) -> dict[str, Any]:
         restored = 0

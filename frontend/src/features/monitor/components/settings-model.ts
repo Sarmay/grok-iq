@@ -4,10 +4,23 @@ import type {
   ExecutionMode,
   ProbeTpsOverrideMode,
   ProxyTarget,
+  QuarantineRecheckSource,
   RuntimeSettings,
   RuntimeSettingsUpdate,
   SecretSettingName,
 } from '@/lib/api'
+
+export const QUARANTINE_RECHECK_SOURCE_OPTIONS: {
+  value: QuarantineRecheckSource
+  label: string
+}[] = [
+  { value: 'probe', label: '探针判定' },
+  { value: 'quality_retry', label: 'grok2api 降智停用' },
+  { value: 'request_audit', label: '请求审计' },
+  { value: 'sso', label: 'SSO 上报' },
+  { value: 'register', label: '注册检测' },
+  { value: 'manual', label: '人工隔离' },
+]
 
 export type SettingsForm = {
   grok2apiBaseUrl: string
@@ -101,6 +114,9 @@ export type SettingsForm = {
   qualityRetryIsolationEnabled: boolean
   qualityRetryIsolationIntervalSeconds: number
   quarantineMinutes: number
+  quarantineRecheckRestoreEnabled: boolean
+  quarantineRecheckPassCount: number
+  quarantineRecheckRestoreSources: QuarantineRecheckSource[]
 }
 
 export const AUTO_ISOLATION_MIN_STATUS_OPTIONS: {
@@ -342,7 +358,8 @@ export function toSettingsForm(
     registerPriorityHold: settings.registerPriorityHold ?? -1_000_000,
     registerCallbackEnabled: settings.registerCallbackEnabled ?? false,
     registerCallbackUrl: settings.registerCallbackUrl ?? '',
-    registerCallbackTimeoutSeconds: settings.registerCallbackTimeoutSeconds ?? 10,
+    registerCallbackTimeoutSeconds:
+      settings.registerCallbackTimeoutSeconds ?? 10,
     wechatNotificationEnabled: settings.wechatNotificationEnabled,
     wechatAppId: settings.wechatAppId,
     wechatAppSecret: settings.wechatAppSecret,
@@ -383,8 +400,7 @@ export function toSettingsForm(
       settings.requestAuditLiveRefreshSeconds ?? 30,
     requestAuditRetentionDays: settings.requestAuditRetentionDays ?? 90,
     requestAuditRiskEnabled: settings.requestAuditRiskEnabled ?? true,
-    requestAuditIsolationEnabled:
-      settings.requestAuditIsolationEnabled ?? true,
+    requestAuditIsolationEnabled: settings.requestAuditIsolationEnabled ?? true,
     reasoningZeroRiskEnabled: settings.reasoningZeroRiskEnabled ?? true,
     reasoningModelPolicies: (settings.reasoningModelPolicies ?? []).map(
       (policy) => ({
@@ -450,6 +466,11 @@ export function toSettingsForm(
     qualityRetryIsolationIntervalSeconds:
       settings.qualityRetryIsolationIntervalSeconds ?? 60,
     quarantineMinutes: settings.quarantineMinutes,
+    quarantineRecheckRestoreEnabled:
+      settings.quarantineRecheckRestoreEnabled ?? false,
+    quarantineRecheckPassCount: settings.quarantineRecheckPassCount ?? 2,
+    quarantineRecheckRestoreSources:
+      settings.quarantineRecheckRestoreSources ?? ['probe', 'quality_retry'],
   }
 }
 
@@ -505,8 +526,7 @@ export function buildSettingsPayload(
       form.requestAuditNormalScanIntervalSeconds,
     requestAuditIdleScanIntervalSeconds:
       form.requestAuditIdleScanIntervalSeconds,
-    requestAuditBusyRequestsPerMinute:
-      form.requestAuditBusyRequestsPerMinute,
+    requestAuditBusyRequestsPerMinute: form.requestAuditBusyRequestsPerMinute,
     requestAuditLiveRefreshEnabled: form.requestAuditLiveRefreshEnabled,
     requestAuditLiveRefreshSeconds: form.requestAuditLiveRefreshSeconds,
     requestAuditRetentionDays: form.requestAuditRetentionDays,
@@ -554,6 +574,9 @@ export function buildSettingsPayload(
     qualityRetryIsolationIntervalSeconds:
       form.qualityRetryIsolationIntervalSeconds,
     quarantineMinutes: form.quarantineMinutes,
+    quarantineRecheckRestoreEnabled: form.quarantineRecheckRestoreEnabled,
+    quarantineRecheckPassCount: form.quarantineRecheckPassCount,
+    quarantineRecheckRestoreSources: form.quarantineRecheckRestoreSources,
     clearSecrets,
   }
   if (

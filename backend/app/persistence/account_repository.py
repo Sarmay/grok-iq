@@ -377,6 +377,16 @@ class AccountRepository:
                 ).all()
             )
 
+    def quarantined_account_ids(self) -> set[int]:
+        with self.database.session() as session:
+            return set(
+                session.scalars(
+                    select(AccountAssessment.account_id).where(
+                        AccountAssessment.monitor_status == "quarantined"
+                    )
+                ).all()
+            )
+
     def recalculate(self, account_id: int, thresholds: Thresholds, window_hours: int) -> dict[str, Any]:
         cutoff = utc_now() - timedelta(hours=window_hours)
         with self.database.transaction() as session:

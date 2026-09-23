@@ -47,6 +47,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { IconBadge } from '@/components/ui/icon-badge'
 import { Input } from '@/components/ui/input'
 import {
   Popover,
@@ -61,8 +62,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Textarea } from '@/components/ui/textarea'
 import {
   Table,
   TableBody,
@@ -71,7 +70,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { IconBadge } from '@/components/ui/icon-badge'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
 import { ActionToolbar, ToolbarAction } from '@/components/action-toolbar'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { EnabledBadge } from '@/components/enabled-badge'
@@ -867,9 +867,7 @@ function SystemCronPanel({
             <Input
               value={form.schedulerTimezone}
               disabled={disabled}
-              onChange={(event) =>
-                set('schedulerTimezone', event.target.value)
-              }
+              onChange={(event) => set('schedulerTimezone', event.target.value)}
               placeholder='UTC'
             />
           </Field>
@@ -881,10 +879,7 @@ function SystemCronPanel({
               value={form.schedulerMisfireGraceSeconds}
               disabled={disabled}
               onChange={(event) =>
-                set(
-                  'schedulerMisfireGraceSeconds',
-                  Number(event.target.value)
-                )
+                set('schedulerMisfireGraceSeconds', Number(event.target.value))
               }
             />
           </Field>
@@ -1476,6 +1471,7 @@ function PlanDialog({
                 <SelectItem value='fixed'>固定账号</SelectItem>
                 <SelectItem value='all_enabled'>全部启用账号</SelectItem>
                 <SelectItem value='risky_enabled'>风险账号</SelectItem>
+                <SelectItem value='quarantined'>隔离/降智账号复检</SelectItem>
               </SelectContent>
             </Select>
             <p className='text-xs leading-5 text-muted-foreground'>
@@ -1483,7 +1479,9 @@ function PlanDialog({
                 ? '仅巡检保存时选定的账号。'
                 : accountScope === 'all_enabled'
                   ? '每次触发实时读取 grok2api 中全部启用账号，新账号会自动加入。'
-                  : '每次触发实时读取本地状态为观察、可疑或高风险且上游仍启用的账号。'}
+                  : accountScope === 'risky_enabled'
+                    ? '每次触发实时读取本地状态为观察、可疑或高风险且上游仍启用的账号。'
+                    : '每次触发复检全部已隔离账号（上游已停用的会以诊断模式临时启用）。开启「复检通过自动恢复」后，连续通过即自动解除隔离。'}
             </p>
           </Field>
           {accountScope === 'fixed' && (
@@ -1701,12 +1699,16 @@ function getPlanProfileIds(plan: ProbePlan): string[] {
 function accountScopeLabel(plan: ProbePlan) {
   if (plan.account_scope === 'all_enabled') return '全部启用账号'
   if (plan.account_scope === 'risky_enabled') return '风险账号'
+  if (plan.account_scope === 'quarantined') return '隔离账号复检'
   return `固定 ${plan.account_ids.length} 个`
 }
 
 function accountScopeDescription(plan: ProbePlan) {
   if (plan.account_scope === 'all_enabled') {
     return '每次触发实时读取 grok2api 中全部启用账号，新导入账号会自动进入后续巡检。'
+  }
+  if (plan.account_scope === 'quarantined') {
+    return '每次触发复检全部已隔离账号，连续通过且来源允许时自动解除隔离。'
   }
   if (plan.account_scope === 'risky_enabled') {
     return '每次触发实时选择本地状态为观察、可疑或高风险且 grok2api 仍启用的账号。'

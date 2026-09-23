@@ -882,6 +882,49 @@ class ProbeRepository:
             run = session.get(ProbeRun, run_id)
             return model_dict(run) if run else None
 
+    def count_consecutive_clean_runs(
+        self,
+        account_id: int,
+        *,
+        since: datetime | None,
+        limit: int,
+    ) -> int:
+        """Count the latest back-to-back completed runs without any anomaly.
+
+        Only runs created after ``since`` (the isolation moment) count, so
+        evidence gathered before the account was isolated cannot lift it.
+        A run with warnings, errors or no stored samples ends the streak.
+        """
+
+        capped = max(1, min(int(limit), 50))
+        with self.database.session() as session:
+            query = (
+                select(ProbeRun)
+                .where(
+                    ProbeRun.account_id == int(account_id),
+                    ProbeRun.status.in_(("completed", "failed", "completed_with_errors")),
+                )
+                .order_by(ProbeRun.created_at.desc())
+                .limit(capped)
+            )
+            if since is not None:
+                query = query.where(ProbeRun.created_at >= since)
+            runs = session.scalars(query).all()
+        streak = 0
+        for run in runs:
+            summary = run.summary if isinstance(run.summary, dict) else {}
+            clean = (
+                run.status == "completed"
+                and int(summary.get("sample_count") or 0) > 0
+                and int(summary.get("anomaly_count") or 0) == 0
+                and int(summary.get("warning_count") or 0) == 0
+                and int(summary.get("errors") or 0) == 0
+            )
+            if not clean:
+                break
+            streak += 1
+        return streak
+
     def list_runs_for_source_event(self, source_event_id: str) -> list[dict[str, Any]]:
         event_id = str(source_event_id or "").strip()
         if not event_id:

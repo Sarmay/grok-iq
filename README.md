@@ -350,6 +350,7 @@ cp .env.example .env
 # GROKIQ_GROK2API_BASE_URL
 # GROKIQ_GROK2API_ADMIN_USERNAME
 # GROKIQ_GROK2API_ADMIN_PASSWORD
+# GROKIQ_GROK2API_CLIENT_API_KEY
 # GROKIQ_WEBHOOK_TOKEN
 
 docker compose -f compose.yaml -f compose.grokiq.yaml pull

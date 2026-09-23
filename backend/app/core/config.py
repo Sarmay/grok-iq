@@ -30,6 +30,15 @@ AUTO_ISOLATION_STATUS_ORDER: tuple[AutoIsolationMinStatus, ...] = (
     "high_risk",
 )
 DEFAULT_AUTO_ISOLATION_MIN_STATUS: AutoIsolationMinStatus = "high_risk"
+# Addresses written by the first Docker or local boot. An explicit
+# GROKIQ_GROK2API_BASE_URL replaces one of these after it has been saved.
+PLACEHOLDER_GATEWAY_URLS = frozenset(
+    {
+        "http://127.0.0.1:8000",
+        "http://localhost:8000",
+        "http://host.docker.internal:8000",
+    }
+)
 
 
 def should_auto_isolate(
@@ -95,6 +104,9 @@ class Settings(BaseSettings):
     grok2api_admin_username: str = ""
     grok2api_admin_password: str = ""
     grok2api_http_impersonate: str = "chrome"
+    # Playground default gateway only. Stays environment-backed so a restart
+    # picks up edits, and is used when that provider has no key of its own.
+    grok2api_client_api_key: str = ""
 
     grok_register_webhook_token: str = ""
     # Optional proxy for SSO checks. Empty allows direct egress.

@@ -56,13 +56,17 @@ auth_service = AuthService(settings, auth_repository)
 linuxdo_oauth_service = LinuxDoOAuthService(
     settings, auth_service.secret, LinuxDoConnectClient()
 )
-chat_service = ChatService(settings=settings, providers=chat_provider_repository)
+grok_client = Grok2APIClient(settings)
+chat_service = ChatService(
+    settings=settings,
+    providers=chat_provider_repository,
+    gateway=grok_client,
+)
 sso_report_service = SsoReportService(
     sso_report_repository,
     register_events=register_event_repository,
     settings=settings,
 )
-grok_client = Grok2APIClient(settings)
 wechat_client = WeChatTestAccountClient(settings)
 wechat_notification_service = WeChatAccountNotificationService(
     settings, wechat_client

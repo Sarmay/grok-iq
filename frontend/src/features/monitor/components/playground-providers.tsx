@@ -507,7 +507,7 @@ function ProviderEditorDialog({
             {followsSystemGateway && (
               <p className='text-xs text-muted-foreground'>
                 默认网关跟随系统设置里的 grok2api
-                服务地址。要连接其他服务，请新建提供商并改用其他名称。
+                服务地址。未填写客户端 API Key 时，模型列表走管理员接口。要连接其他服务，请新建提供商并改用其他名称。
               </p>
             )}
           </PlaygroundField>

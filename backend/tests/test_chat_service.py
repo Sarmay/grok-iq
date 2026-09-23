@@ -200,7 +200,7 @@ async def test_default_gateway_lists_models_from_live_grok2api_url() -> None:
         "id": "gateway",
         "name": "默认网关",
         "base_url": "http://127.0.0.1:8000",
-        "api_key": "",
+        "api_key": "client-key",
         "models": [],
         "enabled": True,
     }
@@ -218,6 +218,147 @@ async def test_default_gateway_lists_models_from_live_grok2api_url() -> None:
         {"id": "grok-4.5", "name": "grok-4.5", "owned_by": "默认网关"}
     ]
     assert session.get.await_args.args[0] == "http://107.174.124.163:8000/v1/models"
+    assert session.get.await_args.kwargs["headers"]["Authorization"] == "Bearer client-key"
+
+
+@pytest.mark.asyncio
+async def test_default_gateway_uses_environment_client_api_key() -> None:
+    settings = Settings(
+        _env_file=None,
+        grok2api_base_url="http://107.174.124.163:8000",
+        grok2api_client_api_key="env-client-key",
+    )
+    providers = MagicMock()
+    providers.get_default.return_value = {
+        "id": "gateway",
+        "name": "默认网关",
+        "base_url": "http://127.0.0.1:8000",
+        "api_key": "",
+        "models": [],
+        "enabled": True,
+    }
+    response = MagicMock(status_code=200, text="")
+    response.json.return_value = {"data": [{"id": "grok-4.7"}]}
+    session = MagicMock()
+    session.get = AsyncMock(return_value=response)
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("app.services.chat_service.CurlAsyncSession", return_value=session):
+        await ChatService(settings=settings, providers=providers).list_models("")
+
+    assert session.get.await_args.args[0] == "http://107.174.124.163:8000/v1/models"
+    assert session.get.await_args.kwargs["headers"]["Authorization"] == "Bearer env-client-key"
+
+
+def test_environment_client_api_key_marks_default_gateway_configured() -> None:
+    settings = Settings(
+        _env_file=None,
+        grok2api_client_api_key="env-client-key",
+    )
+    providers = MagicMock()
+    providers.list.return_value = [
+        {
+            "id": "gateway",
+            "name": "默认网关",
+            "base_url": "http://127.0.0.1:8000",
+            "models": [],
+            "enabled": True,
+            "is_default": True,
+            "api_key_configured": False,
+            "created_at": "2026-09-23T00:00:00Z",
+            "updated_at": "2026-09-23T00:00:00Z",
+        }
+    ]
+
+    listed = ChatService(settings=settings, providers=providers).list_providers()
+
+    assert listed[0]["apiKeyConfigured"] is True
+
+
+@pytest.mark.asyncio
+async def test_default_gateway_without_client_key_lists_admin_models() -> None:
+    settings = Settings(
+        _env_file=None,
+        grok2api_base_url="http://107.174.124.163:8000",
+        grok2api_admin_username="admin",
+        grok2api_admin_password="secret",
+    )
+    providers = MagicMock()
+    providers.get_default.return_value = {
+        "id": "gateway",
+        "name": "默认网关",
+        "base_url": "http://host.docker.internal:8000",
+        "api_key": "",
+        "models": [],
+        "enabled": True,
+    }
+    gateway = MagicMock()
+    gateway.admin_request = AsyncMock(
+        return_value={
+            "items": [
+                {"publicId": "grok-4.7", "enabled": True},
+                {"publicId": "grokiq-probe-temporary", "enabled": True},
+                {"publicId": "grok-stt", "enabled": False},
+            ],
+            "page": 1,
+            "pageSize": 200,
+            "total": 3,
+        }
+    )
+
+    models = await ChatService(
+        settings=settings,
+        providers=providers,
+        gateway=gateway,
+    ).list_models("")
+
+    assert [item["id"] for item in models] == ["grok-4.7"]
+    gateway.admin_request.assert_awaited_once()
+    assert gateway.admin_request.await_args.args[1] == "/api/admin/v1/models"
+
+
+@pytest.mark.asyncio
+async def test_default_gateway_invalid_client_key_falls_back_to_admin_models() -> None:
+    settings = Settings(
+        _env_file=None,
+        grok2api_base_url="http://107.174.124.163:8000",
+        grok2api_admin_username="admin",
+        grok2api_admin_password="secret",
+    )
+    providers = MagicMock()
+    providers.get_default.return_value = {
+        "id": "gateway",
+        "name": "默认网关",
+        "base_url": "http://host.docker.internal:8000",
+        "api_key": "stale-key",
+        "models": [],
+        "enabled": True,
+    }
+    response = MagicMock(status_code=401, text='{"error":{"code":"invalid_api_key"}}')
+    session = MagicMock()
+    session.get = AsyncMock(return_value=response)
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+    gateway = MagicMock()
+    gateway.admin_request = AsyncMock(
+        return_value={
+            "items": [{"publicId": "grok-4.5", "enabled": True}],
+            "page": 1,
+            "pageSize": 200,
+            "total": 1,
+        }
+    )
+
+    with patch("app.services.chat_service.CurlAsyncSession", return_value=session):
+        models = await ChatService(
+            settings=settings,
+            providers=providers,
+            gateway=gateway,
+        ).list_models("")
+
+    assert session.get.await_args.args[0] == "http://107.174.124.163:8000/v1/models"
+    assert [item["id"] for item in models] == ["grok-4.5"]
 
 
 @pytest.mark.asyncio

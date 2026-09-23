@@ -5,6 +5,7 @@ from typing import Any
 from app.analyzer import risk_rule_definitions, risk_rule_enabled, thresholds_from_settings
 from app.core.config import (
     DEFAULT_REGISTER_PROBE_PROFILE_IDS,
+    PLACEHOLDER_GATEWAY_URLS,
     REGISTER_PROBE_EXECUTION_MODE,
     REGISTER_PROBE_PROXY_TARGETS,
     Settings,
@@ -44,6 +45,10 @@ class RuntimeSettingsService:
 
     def load(self) -> None:
         overrides = self.repository.load()
+        adopted_gateway = self._adopt_explicit_gateway_url(overrides)
+        if adopted_gateway is not None:
+            overrides["grok2api_base_url"] = adopted_gateway
+            self.repository.save({"grok2api_base_url": adopted_gateway})
         if not self.repository.migration_applied(
             REGISTER_FIXED_STRATEGY_MIGRATION_KEY
         ):
@@ -114,6 +119,22 @@ class RuntimeSettingsService:
             overrides = synchronized
         candidate = self._validate(self.settings.model_dump() | overrides)
         self.settings.apply_runtime(candidate)
+
+    def _adopt_explicit_gateway_url(self, overrides: dict[str, Any]) -> str | None:
+        """Prefer a real GROKIQ_GROK2API_BASE_URL over a saved boot default.
+
+        The first container start often persists ``host.docker.internal``.
+        Changing the environment afterwards must reach the playground, which
+        follows this runtime address.
+        """
+
+        stored = str(overrides.get("grok2api_base_url") or "").strip().rstrip("/")
+        configured = self.settings.grok2api_base_url.strip().rstrip("/")
+        if stored not in PLACEHOLDER_GATEWAY_URLS:
+            return None
+        if not configured or configured in PLACEHOLDER_GATEWAY_URLS or configured == stored:
+            return None
+        return configured
 
     def update(self, values: dict[str, Any]) -> list[str]:
         changes = {

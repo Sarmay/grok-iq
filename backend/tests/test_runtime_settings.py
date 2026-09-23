@@ -64,6 +64,44 @@ def test_runtime_settings_are_encrypted_masked_and_reloadable(tmp_path: Path):
     assert reloaded_settings.grok2api_base_url == "http://grok2api.test:8000"
 
 
+def test_saved_placeholder_gateway_adopts_environment_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GROKIQ_GROK2API_BASE_URL", "http://107.174.124.163:8000")
+    database = Database(tmp_path / "grokiq.db")
+    database.initialize()
+    initial = Settings(_env_file=None, database_path=database.path)
+    SettingsRepository(database, initial).save(
+        {"grok2api_base_url": "http://host.docker.internal:8000"}
+    )
+
+    reloaded = Settings(_env_file=None, database_path=database.path)
+    service = RuntimeSettingsService(reloaded, SettingsRepository(database, reloaded))
+    service.load()
+
+    assert reloaded.grok2api_base_url == "http://107.174.124.163:8000"
+
+
+def test_saved_custom_gateway_url_overrides_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GROKIQ_GROK2API_BASE_URL", "http://107.174.124.163:8000")
+    database = Database(tmp_path / "grokiq.db")
+    database.initialize()
+    initial = Settings(_env_file=None, database_path=database.path)
+    SettingsRepository(database, initial).save(
+        {"grok2api_base_url": "http://grok2api.test:8000"}
+    )
+
+    reloaded = Settings(_env_file=None, database_path=database.path)
+    service = RuntimeSettingsService(reloaded, SettingsRepository(database, reloaded))
+    service.load()
+
+    assert reloaded.grok2api_base_url == "http://grok2api.test:8000"
+
+
 def test_blank_secret_preserves_value_and_explicit_clear_removes_it():
     keep = RuntimeSettingsInput(grok2apiAdminPassword="")
     assert "grok2api_admin_password" not in keep.runtime_changes()

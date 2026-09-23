@@ -8,8 +8,8 @@ from urllib.parse import urlsplit
 
 from curl_cffi.requests import AsyncSession as CurlAsyncSession
 
-from app.core.config import Settings
-from app.integrations.grok2api.client import IntegrationError
+from app.core.config import PLACEHOLDER_GATEWAY_URLS, Settings
+from app.integrations.grok2api.client import Grok2APIClient, IntegrationError
 from app.integrations.grok2api.http_session import open_curl_session
 from app.persistence.chat_provider_repository import ChatProviderRepository
 
@@ -27,13 +27,6 @@ class ChatUpstreamError(IntegrationError):
 # Seeded once, then kept aligned with the live grok2api address. A provider
 # under any other name keeps the Base URL saved in the playground.
 DEFAULT_GATEWAY_PROVIDER_NAME = "默认网关"
-_BOOTSTRAP_GATEWAY_URLS = frozenset(
-    {
-        "http://127.0.0.1:8000",
-        "http://localhost:8000",
-        "http://host.docker.internal:8000",
-    }
-)
 
 
 class ChatService:
@@ -44,9 +37,11 @@ class ChatService:
         *,
         settings: Settings,
         providers: ChatProviderRepository,
+        gateway: Grok2APIClient | None = None,
     ):
         self.settings = settings
         self.providers = providers
+        self.gateway = gateway
 
     def bootstrap(self) -> None:
         gateway = self.settings.normalized_gateway_base_url
@@ -69,7 +64,10 @@ class ChatService:
                 self.providers.update(provider["id"], {"base_url": gateway})
 
     def list_providers(self) -> list[dict[str, Any]]:
-        return [self._public(self._with_live_gateway(item)) for item in self.providers.list()]
+        return [
+            self._public(self._with_gateway_credentials(item))
+            for item in self.providers.list()
+        ]
 
     def create_provider(self, values: dict[str, Any]) -> dict[str, Any]:
         name = str(values["name"]).strip()
@@ -81,7 +79,7 @@ class ChatService:
             enabled=bool(values.get("enabled", True)),
             is_default=bool(values.get("is_default", False)),
         )
-        return self._public(self._with_live_gateway(provider))
+        return self._public(self._with_gateway_credentials(provider))
 
     def update_provider(
         self,
@@ -112,7 +110,7 @@ class ChatService:
         provider = self.providers.update(provider_id, changes)
         if provider is None:
             raise ValueError("模型提供商不存在")
-        return self._public(self._with_live_gateway(provider))
+        return self._public(self._with_gateway_credentials(provider))
 
     def delete_provider(self, provider_id: str) -> None:
         if not self.providers.delete(provider_id):
@@ -122,6 +120,7 @@ class ChatService:
         provider = self.providers.get(provider_id, reveal_secret=True)
         if provider is None:
             raise ValueError("模型提供商不存在")
+        provider = self._with_gateway_credentials(provider)
         return str(provider.get("api_key") or "")
 
     async def list_models(self, provider_id: str = "") -> list[dict[str, Any]]:
@@ -140,7 +139,7 @@ class ChatService:
         updated = self.providers.set_models(provider["id"], models)
         if updated is None:
             raise ValueError("模型提供商不存在")
-        return self._public(self._with_live_gateway(updated))
+        return self._public(self._with_gateway_credentials(updated))
 
     async def open_completion(
         self,
@@ -195,6 +194,55 @@ class ChatService:
         raise IntegrationError("模型提供商没有可用的聊天接口")
 
     async def _fetch_models(self, provider: dict[str, Any]) -> list[str]:
+        # grok2api rejects /v1/models unless the caller presents a client key.
+        # The built-in gateway already has admin credentials, so an empty or
+        # rejected playground key reads the admin model catalog instead.
+        if self._follows_gateway(provider) and not str(provider.get("api_key") or "").strip():
+            return await self._fetch_gateway_models()
+        try:
+            return await self._fetch_openai_models(provider)
+        except ChatUpstreamError as exc:
+            if exc.status_code == 401 and self._follows_gateway(provider):
+                return await self._fetch_gateway_models()
+            raise
+
+    async def _fetch_gateway_models(self) -> list[str]:
+        if self.gateway is None or not (
+            self.settings.grok2api_admin_username.strip()
+            and self.settings.grok2api_admin_password
+        ):
+            raise IntegrationError(
+                "默认网关读取模型需要 grok2api 管理员账号，或在模型提供商中填写有效的客户端 API Key"
+            )
+        models: list[str] = []
+        page = 1
+        while page <= 50:
+            payload = await self.gateway.admin_request(
+                "GET",
+                "/api/admin/v1/models",
+                params={"page": page, "pageSize": 200},
+                timeout=60,
+            )
+            if not isinstance(payload, dict):
+                break
+            items = payload.get("items")
+            if not isinstance(items, list) or not items:
+                break
+            for item in items:
+                if not isinstance(item, dict) or item.get("enabled") is False:
+                    continue
+                public_id = str(item.get("publicId") or "").strip()
+                if not public_id or public_id.startswith(f"{self.settings.probe_route_prefix}-"):
+                    continue
+                models.append(public_id)
+            total = int(payload.get("total") or 0)
+            page_size = int(payload.get("pageSize") or 200)
+            if page * page_size >= total:
+                break
+            page += 1
+        return self._normalize_models(models)
+
+    async def _fetch_openai_models(self, provider: dict[str, Any]) -> list[str]:
         headers = self._upstream_headers(provider, accept="application/json")
         url = self._resource_url(
             self._base_without_endpoint(provider["base_url"]),
@@ -244,7 +292,7 @@ class ChatService:
             raise ValueError("请先配置模型提供商")
         if not provider["enabled"]:
             raise ValueError("当前模型提供商已停用")
-        return self._with_live_gateway(provider)
+        return self._with_gateway_credentials(provider)
 
     def _provider_base_url(self, name: str, value: str) -> str:
         if name == DEFAULT_GATEWAY_PROVIDER_NAME:
@@ -252,12 +300,25 @@ class ChatService:
         return self._normalize_base_url(value)
 
     def _with_live_gateway(self, provider: dict[str, Any]) -> dict[str, Any]:
-        if not self._follows_gateway(provider):
-            return provider
         gateway = self.settings.normalized_gateway_base_url
-        if str(provider.get("base_url") or "").rstrip("/") == gateway:
+        stored = str(provider.get("base_url") or "").rstrip("/")
+        follows = self._follows_gateway(provider) or (
+            stored in PLACEHOLDER_GATEWAY_URLS and gateway not in PLACEHOLDER_GATEWAY_URLS
+        )
+        if not follows or stored == gateway:
             return provider
         return {**provider, "base_url": gateway}
+
+    def _with_gateway_credentials(self, provider: dict[str, Any]) -> dict[str, Any]:
+        provider = self._with_live_gateway(provider)
+        if not self._follows_gateway(provider):
+            return provider
+        if str(provider.get("api_key") or "").strip():
+            return provider
+        api_key = self.settings.grok2api_client_api_key.strip()
+        if not api_key:
+            return provider
+        return {**provider, "api_key": api_key, "api_key_configured": True}
 
     @staticmethod
     def _follows_gateway(provider: dict[str, Any]) -> bool:
@@ -269,7 +330,7 @@ class ChatService:
         stored = str(provider.get("base_url") or "").rstrip("/")
         return (
             bool(provider.get("is_default"))
-            and stored in _BOOTSTRAP_GATEWAY_URLS
+            and stored in PLACEHOLDER_GATEWAY_URLS
             and stored != self.settings.normalized_gateway_base_url
         )
 

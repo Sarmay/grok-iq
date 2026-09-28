@@ -945,7 +945,7 @@ class AccountService:
         }
 
     async def ensure_account_egress(self, account: dict[str, Any]) -> dict[str, Any]:
-        """Pin one unbound webhook account to the least-loaded healthy egress."""
+        """Bind one unbound webhook account to the least-loaded healthy egress."""
 
         account_id = int(account.get("id") or 0)
         if account_id <= 0:
@@ -978,10 +978,11 @@ class AccountService:
         node_id = int(selected.get("id") or 0)
         if node_id <= 0:
             raise ValueError("自动绑定选出的出口节点 ID 无效")
+        # grok2api 只迁移 auto。写成 manual 会把注册分配钉死，节点失效后也不会换。
         result = await self.client.set_accounts_egress(
             [account_id],
             node_id,
-            mode="manual",
+            mode="auto",
         )
         if result.updated != 1:
             reason = (

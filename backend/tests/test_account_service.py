@@ -406,13 +406,13 @@ async def test_webhook_account_auto_binding_uses_least_loaded_healthy_node(tmp_p
 
     result = await service.ensure_account_egress({"id": "41", "egressNodeId": None})
 
-    assert client.bindings == [([41], 4, "manual")]
+    assert client.bindings == [([41], 4, "auto")]
     assert result["egressNodeId"] == "4"
-    assert result["egressAssignmentMode"] == "manual"
+    assert result["egressAssignmentMode"] == "auto"
 
     same = await service.ensure_account_egress(result)
     assert same is result
-    assert client.bindings == [([41], 4, "manual")]
+    assert client.bindings == [([41], 4, "auto")]
 
 
 @pytest.mark.asyncio
@@ -433,7 +433,8 @@ async def test_webhook_account_rebind_skips_used_healthy_nodes(tmp_path: Path):
 
     assert rebound is not None
     assert rebound["egressNodeId"] == "3"
-    assert client.bindings == [([41], 3, "manual")]
+    assert rebound["egressAssignmentMode"] == "auto"
+    assert client.bindings == [([41], 3, "auto")]
 
 
 @pytest.mark.asyncio

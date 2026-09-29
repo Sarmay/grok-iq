@@ -56,6 +56,7 @@ EXPECTED_ROUTES = {
     ("DELETE", "/api/egress-nodes"),
     ("POST", "/api/egress-nodes/{node_id}/test"),
     ("POST", "/api/egress-nodes/bind-accounts"),
+    ("GET", "/api/proxy/white"),
     ("GET", "/api/probe-profiles"),
     ("POST", "/api/probe-profiles"),
     ("PUT", "/api/probe-profiles/{profile_id}"),

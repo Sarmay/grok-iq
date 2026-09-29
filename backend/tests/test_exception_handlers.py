@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
 from app.integrations.grok2api.client import IntegrationError
+from app.integrations.proxy1024.client import Proxy1024Error
 from app.persistence.probe_repository import QueueFullError, RunStateError
 from app.services.auth_service import AuthenticationError
 from app.services.chat_service import ChatUpstreamError
@@ -60,6 +61,7 @@ async def test_global_exception_handlers_preserve_business_status_codes():
         (QueueFullError("队列已满"), 429, "队列已满"),
         (RunStateError("任务状态冲突"), 409, "任务状态冲突"),
         (IntegrationError("上游不可用"), 502, "上游不可用"),
+        (Proxy1024Error("1024proxy 提取失败"), 502, "1024proxy 提取失败"),
         (ChatUpstreamError("上游限流", status_code=429), 429, "上游限流"),
     ]
     for exc, status_code, detail in cases:

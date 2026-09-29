@@ -33,6 +33,7 @@ from .routes.integrations import (
     build_register_events_router,
 )
 from .routes.probes import build_probes_router
+from .routes.proxy1024 import build_proxy_white_router
 from .routes.public import build_public_router
 from .routes.request_audits import build_request_audits_router
 from .routes.settings import build_settings_router
@@ -95,6 +96,7 @@ def build_router(
         )
     )
     protected.include_router(build_egress_router(client, egress_service))
+    protected.include_router(build_proxy_white_router())
     protected.include_router(
         build_probes_router(
             settings=settings,

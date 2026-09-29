@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.rate_limit import RateLimitExceeded
 from app.integrations.grok2api.client import IntegrationError
+from app.integrations.proxy1024.client import Proxy1024Error
 from app.integrations.wechat.client import WeChatIntegrationError
 from app.persistence.auth_repository import AdminAlreadyExistsError
 from app.persistence.probe_repository import QueueFullError, RunStateError
@@ -111,6 +112,7 @@ def install_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(IntegrationError)
     @app.exception_handler(WeChatIntegrationError)
+    @app.exception_handler(Proxy1024Error)
     async def upstream_error(_: Request, exc: Exception) -> JSONResponse:
         return _error_response(502, exc)
 

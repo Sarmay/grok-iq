@@ -1,18 +1,26 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
+from app.core.config import Settings
 from app.integrations.proxy1024.client import (
     WHITE_API_URL,
     Proxy1024Client,
     Proxy1024Error,
     parse_proxy_endpoints,
 )
-from app.web.routes.proxy1024 import build_proxy_white_router
+from app.services.auth_service import AuthenticationError
+from app.web.auth import AdminAuthenticationRequired
+from app.web.routes.proxy1024 import (
+    authorize_proxy_white_request,
+    build_proxy_white_router,
+)
 
 
 def test_json_object_list_returns_ip_and_port() -> None:
@@ -137,3 +145,70 @@ async def test_route_returns_extracted_proxies() -> None:
         "Cache-Control",
         "no-store",
     )
+
+
+def test_register_token_can_extract_proxies() -> None:
+    settings = Settings(_env_file=None, grok_register_webhook_token="shared-token")
+    auth = MagicMock()
+    request = MagicMock()
+    request.headers.get.return_value = "shared-token"
+
+    authorize_proxy_white_request(
+        request,
+        settings=settings,
+        auth_service=auth,
+        credentials=None,
+    )
+
+    auth.authenticate_authorization.assert_not_called()
+
+
+def test_invalid_register_token_is_rejected() -> None:
+    settings = Settings(_env_file=None, grok_register_webhook_token="shared-token")
+    request = MagicMock()
+    request.headers.get.return_value = "wrong-token"
+
+    with pytest.raises(HTTPException) as caught:
+        authorize_proxy_white_request(
+            request,
+            settings=settings,
+            auth_service=MagicMock(),
+            credentials=None,
+        )
+
+    assert caught.value.status_code == 401
+    assert caught.value.detail == "联动令牌无效"
+
+
+def test_admin_session_can_extract_without_register_token() -> None:
+    settings = Settings(_env_file=None, grok_register_webhook_token="")
+    auth = MagicMock()
+    auth.authenticate_authorization.return_value = {"username": "admin"}
+    request = MagicMock()
+    request.headers.get.return_value = ""
+
+    authorize_proxy_white_request(
+        request,
+        settings=settings,
+        auth_service=auth,
+        credentials=SimpleNamespace(scheme="Bearer", credentials="jwt"),
+    )
+
+    assert request.state.auth_user == {"username": "admin"}
+
+
+def test_missing_credentials_require_admin_login() -> None:
+    settings = Settings(_env_file=None, grok_register_webhook_token="shared-token")
+    auth = MagicMock()
+    auth.setup_required.return_value = False
+    auth.authenticate_authorization.side_effect = AuthenticationError("登录已过期")
+    request = MagicMock()
+    request.headers.get.return_value = ""
+
+    with pytest.raises(AdminAuthenticationRequired, match="登录已过期"):
+        authorize_proxy_white_request(
+            request,
+            settings=settings,
+            auth_service=auth,
+            credentials=SimpleNamespace(scheme="Bearer", credentials="jwt"),
+        )

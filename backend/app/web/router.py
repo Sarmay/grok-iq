@@ -83,6 +83,9 @@ def build_router(
     router.include_router(
         build_integrations_router(settings, register_integration)
     )
+    router.include_router(
+        build_proxy_white_router(settings=settings, auth_service=auth_service)
+    )
 
     protected.include_router(build_accounts_router(account_service))
     protected.include_router(
@@ -96,7 +99,6 @@ def build_router(
         )
     )
     protected.include_router(build_egress_router(client, egress_service))
-    protected.include_router(build_proxy_white_router())
     protected.include_router(
         build_probes_router(
             settings=settings,
